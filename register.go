@@ -36,7 +36,7 @@ type ReadableRegister interface {
 type ReadableRegisters []ReadableRegister
 
 // 必须是连续的寄存器才能读取
-func (rs ReadableRegisters) Bytes(address uint8) []byte {
+func (rs ReadableRegisters) ReadBytes(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rs.GetStart(), rs.GetNum())
 	return f.Bytes()
@@ -114,6 +114,25 @@ type ReadableAndWritableRegister interface {
 }
 
 type ReadableAndWritableRegisters []ReadableAndWritableRegister
+
+func (rws ReadableAndWritableRegisters) GetStart() uint16 {
+	return rws[0].GetStart()
+}
+
+func (rws ReadableAndWritableRegisters) GetNum() uint16 {
+	var result uint16
+	for _, r := range rws {
+		result = result + r.GetNum()
+	}
+	return result
+}
+
+// 必须是连续的寄存器才能读取
+func (rws ReadableAndWritableRegisters) ReadBytes(address uint8) []byte {
+	f := &RTUFrame{Address: address, Function: Read}
+	SetDataWithRegisterAndNumber(f, rws.GetStart(), rws.GetNum())
+	return f.Bytes()
+}
 
 func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface{} {
 	m := make(map[string]interface{})
