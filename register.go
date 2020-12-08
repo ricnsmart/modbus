@@ -107,6 +107,28 @@ func (ws WritableRegisters) Encode(params map[string]interface{}) ([]byte, error
 	return result, nil
 }
 
+func (ws WritableRegisters) GetStart() uint16 {
+	return ws[0].GetStart()
+}
+
+func (ws WritableRegisters) GetNum() uint16 {
+	var result uint16
+	for _, r := range ws {
+		result = result + r.GetNum()
+	}
+	return result
+}
+
+func (ws WritableRegisters) WriteBytes(address uint8, params map[string]interface{}) ([]byte, error) {
+	f := &RTUFrame{Address: address, Function: Write}
+	buf, err := ws.Encode(params)
+	if err != nil {
+		return nil, err
+	}
+	SetDataWithRegisterAndNumberAndBytes(f, ws.GetStart(), ws.GetNum(), buf)
+	return f.Bytes(), nil
+}
+
 type ReadableAndWritableRegister interface {
 	Register
 	Readable
@@ -132,6 +154,16 @@ func (rws ReadableAndWritableRegisters) ReadBytes(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rws.GetStart(), rws.GetNum())
 	return f.Bytes()
+}
+
+func (rws ReadableAndWritableRegisters) WriteBytes(address uint8, params map[string]interface{}) ([]byte, error) {
+	f := &RTUFrame{Address: address, Function: Write}
+	buf, err := rws.Encode(params)
+	if err != nil {
+		return nil, err
+	}
+	SetDataWithRegisterAndNumberAndBytes(f, rws.GetStart(), rws.GetNum(), buf)
+	return f.Bytes(), nil
 }
 
 func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface{} {
