@@ -54,10 +54,11 @@ func (rs ReadableRegisters) GetNum() uint16 {
 	return result
 }
 
+// 必须是连续的寄存器才能读取
 func (rs ReadableRegisters) Decode(data []byte) map[string]interface{} {
 	m := make(map[string]interface{})
 	for _, r := range rs {
-		start := r.GetStart()
+		start := (r.GetStart() - rs.GetStart()) * 2
 		end := start + r.GetNum()*2
 		r.Decode(data[start:end], m)
 	}
@@ -169,7 +170,7 @@ func (rws ReadableAndWritableRegisters) WriteBytes(address uint8, params map[str
 func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface{} {
 	m := make(map[string]interface{})
 	for _, r := range rws {
-		start := r.GetStart()
+		start := (r.GetStart() - rws.GetStart()) * 2
 		end := start + r.GetNum()*2
 		r.Decode(data[start:end], m)
 	}
