@@ -115,6 +115,27 @@ type ReadableAndWritableRegister interface {
 
 type ReadableAndWritableRegisters []ReadableAndWritableRegister
 
+func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface{} {
+	m := make(map[string]interface{})
+	for _, r := range rws {
+		start := r.GetStart()
+		end := start + r.GetNum()*2
+		r.Decode(data[start:end], m)
+	}
+	return m
+}
+
+func (rws ReadableAndWritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
+	result := make([]byte, 0)
+	for _, w := range rws {
+		if err := w.Verify(params); err != nil {
+			return nil, err
+		}
+		result = append(result, w.Encode(params)...)
+	}
+	return result, nil
+}
+
 type StringRwRegister struct {
 	Name     string
 	Start    uint16
