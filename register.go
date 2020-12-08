@@ -36,6 +36,7 @@ type ReadableRegister interface {
 type ReadableRegisters []ReadableRegister
 
 // 必须是连续的寄存器才能读取
+// 将可度寄存器转换为读取寄存器标准modbus报文
 func (rs ReadableRegisters) ReadBytes(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rs.GetStart(), rs.GetNum())
@@ -120,6 +121,7 @@ func (ws WritableRegisters) GetNum() uint16 {
 	return result
 }
 
+// 将可写寄存器转换为写入寄存器标准modbus报文
 func (ws WritableRegisters) WriteBytes(address uint8, params map[string]interface{}) ([]byte, error) {
 	f := &RTUFrame{Address: address, Function: Write}
 	buf, err := ws.Encode(params)
