@@ -72,6 +72,7 @@ type Float32RoRegister struct {
 	Name  string
 	Start uint16
 	Num   uint16
+	Order binary.ByteOrder
 	Parse func(data float32) interface{}
 }
 
@@ -84,7 +85,10 @@ func (f *Float32RoRegister) GetNum() uint16 {
 }
 
 func (f *Float32RoRegister) Decode(data []byte, results map[string]interface{}) {
-	bits := binary.LittleEndian.Uint32(data)
+	if f.Order == nil {
+		panic("该寄存器必须申明大小端模式")
+	}
+	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
 	if f.Parse != nil {
 		results[f.Name] = f.Parse(f32)
@@ -192,6 +196,7 @@ func (rws ReadableAndWritableRegisters) Encode(params map[string]interface{}) ([
 	return result, nil
 }
 
+// 由调用方去处理大小端问题
 type StringRwRegister struct {
 	Name     string
 	Start    uint16
@@ -232,6 +237,9 @@ func (s *StringRwRegister) Verify(params map[string]interface{}) error {
 func (s *StringRwRegister) Encode(params map[string]interface{}) []byte {
 	value := params[s.Name]
 	dst := make([]byte, s.Num*2)
+	if s.Bytes == nil {
+		panic("StringRwRegister类型必须申明Bytes()方法")
+	}
 	s.Bytes(value.(string), dst)
 	return dst
 }
@@ -257,11 +265,10 @@ func (u *Uint16RwRegister) GetNum() uint16 {
 }
 
 func (u *Uint16RwRegister) Decode(data []byte, results map[string]interface{}) {
-	var order binary.ByteOrder = binary.BigEndian
-	if u.Order != nil {
-		order = u.Order
+	if u.Order == nil {
+		panic("该寄存器必须申明大小端模式")
 	}
-	ui16 := order.Uint16(data)
+	ui16 := u.Order.Uint16(data)
 	if u.Parse != nil {
 		results[u.Name] = u.Parse(ui16)
 	} else {
@@ -288,11 +295,7 @@ func (u *Uint16RwRegister) Verify(params map[string]interface{}) error {
 func (u *Uint16RwRegister) Encode(params map[string]interface{}) []byte {
 	value := params[u.Name]
 	b := make([]byte, 2)
-	var order binary.ByteOrder = binary.BigEndian
-	if u.Order != nil {
-		order = u.Order
-	}
-	order.PutUint16(b, uint16(value.(float64)))
+	u.Order.PutUint16(b, uint16(value.(float64)))
 	return b
 }
 
@@ -303,6 +306,7 @@ type Param struct {
 
 // 单个寄存器，两个字节代表两个参数
 // 注意：Params长度必须<=2
+// 无需考虑大小端，因为可以调整参数顺序
 type DoubleParamRwRegister struct {
 	Name   string
 	Start  uint16
@@ -367,6 +371,7 @@ func (b *DoubleParamRwRegister) Encode(params map[string]interface{}) []byte {
 type Float32RwRegister struct {
 	Name     string
 	Start    uint16
+	Order    binary.ByteOrder
 	Parse    func(data float32) byte
 	Validate func(value float32) error
 }
@@ -384,7 +389,10 @@ func (f *Float32RwRegister) GetNum() uint16 {
 }
 
 func (f *Float32RwRegister) Decode(data []byte, results map[string]interface{}) {
-	bits := binary.LittleEndian.Uint32(data)
+	if f.Order == nil {
+		panic("该寄存器必须申明大小端模式")
+	}
+	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
 	if f.Parse != nil {
 		results[f.Name] = f.Parse(f32)
@@ -410,12 +418,13 @@ func (f *Float32RwRegister) Encode(params map[string]interface{}) []byte {
 	bits := math.Float32bits(float32(value.(float64)))
 
 	bytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bytes, bits)
+	f.Order.PutUint32(bytes, bits)
 	return bytes
 }
 
 // 一个寄存器，2个字节，16个比特, 其中包含了多个参数
 // Params长度小于16
+// 由调用方去处理大小端问题
 type BitRwRegister struct {
 	Name   string
 	Start  uint16
@@ -443,31 +452,14 @@ func (b *BitRwRegister) Decode(data []byte, results map[string]interface{}) {
 	if len(b.Params) > 16 {
 		panic(fmt.Sprintf("BitRwRegister must have less than 16 params,actual: %v", len(b.Params)))
 	}
-	// 边界检查，2个字节
-	_ = data[1]
 	for _, p := range b.Params {
 		name := p.Name
 
-		buf := make([]byte, p.Len)
-
-		for k := uint8(0); k < p.Len; k++ {
-			i := p.Start + k
-			j := 0
-			if i >= 8 {
-				i = i - 8
-				j = 1
-			}
-
-			bit := data[j] >> uint(i) & 1
-			buf = append(buf, bit)
+		if p.Parse == nil {
+			panic("BitRwRegister类型必须申明Parse()方法")
 		}
 
-		if p.Parse != nil {
-			results[name] = p.Parse(buf)
-		} else {
-			// 如果Parse方法不存在，则默认该参数只有一个bit位
-			results[name] = buf[0]
-		}
+		results[name] = p.Parse(data)
 	}
 }
 
@@ -479,52 +471,26 @@ func (b *BitRwRegister) Verify(params map[string]interface{}) error {
 	for _, p := range b.Params {
 		name := p.Name
 		value := params[name]
-		if p.Validate != nil {
-			if err := p.Validate(value); err != nil {
-				return err
-			}
-			continue
+		if p.Validate == nil {
+			panic("BitRwRegister类型必须申明Validate()方法")
 		}
-		// 如果Pares方法不存在，默认按照单个bit位来处理
-		switch value.(type) {
-		case int:
-			i := value.(int)
-			// 1个字节的数值范围
-			if i < 0 || i > 255 {
-				return fmt.Errorf("参数 %v  范围越界，期望: 0～255,实际：%v", name, i)
-			}
-		case float64:
-			f64 := value.(float64)
-			// 1个字节的数值范围
-			if f64 < 0 || f64 > 255 {
-				return fmt.Errorf("参数 %v  范围越界，期望: 0～255,实际：%v", name, f64)
-			}
-		default:
-			panic(fmt.Sprintf("不支持的参数类型：%v", reflect.TypeOf(value)))
+		if err := p.Validate(value); err != nil {
+			return err
 		}
+		continue
 	}
 	return nil
 }
 
 func (b *BitRwRegister) Encode(params map[string]interface{}) []byte {
-	buf := make([]byte, 2)
+	dst := make([]byte, 2)
 	for _, p := range b.Params {
 		name := p.Name
 		value := params[name]
-		if p.Bytes != nil {
-			p.Bytes(value, buf)
-		} else {
-			var byteValue byte
-			switch value.(type) {
-			case int:
-				byteValue = byte(value.(int))
-			case float64:
-				byteValue = byte(value.(float64))
-			default:
-				//do nothing
-			}
-			buf = append(buf, byteValue)
+		if p.Bytes == nil {
+			panic("BitRwRegister类型必须申明Bytes()方法")
 		}
+		p.Bytes(value, dst)
 	}
-	return buf
+	return dst
 }
