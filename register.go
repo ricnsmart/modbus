@@ -8,7 +8,9 @@ import (
 )
 
 type Register interface {
+	// 获取寄存器地址
 	GetStart() uint16
+	// 获取寄存器数量
 	GetNum() uint16
 }
 
@@ -410,4 +412,119 @@ func (f *Float32RwRegister) Encode(params map[string]interface{}) []byte {
 	bytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytes, bits)
 	return bytes
+}
+
+// 一个寄存器，2个字节，16个比特, 其中包含了多个参数
+// Params长度小于16
+type BitRwRegister struct {
+	Name   string
+	Start  uint16
+	Params []BitParam
+}
+
+type BitParam struct {
+	Name     string
+	Start    uint8
+	Len      uint8
+	Parse    func(data []byte) interface{}
+	Validate func(value interface{}) error
+	Bytes    func(value interface{}, dst []byte)
+}
+
+func (b *BitRwRegister) GetStart() uint16 {
+	return b.Start
+}
+
+func (b *BitRwRegister) GetNum() uint16 {
+	return 1
+}
+
+func (b *BitRwRegister) Decode(data []byte, results map[string]interface{}) {
+	if len(b.Params) > 16 {
+		panic(fmt.Sprintf("BitRwRegister must have less than 16 params,actual: %v", len(b.Params)))
+	}
+	// 边界检查，2个字节
+	_ = data[1]
+	for _, p := range b.Params {
+		name := p.Name
+
+		buf := make([]byte, p.Len)
+
+		for k := uint8(0); k < p.Len; k++ {
+			i := p.Start + k
+			j := 0
+			if i >= 8 {
+				i = i - 8
+				j = 1
+			}
+
+			bit := data[j] >> uint(i) & 1
+			buf = append(buf, bit)
+		}
+
+		if p.Parse != nil {
+			results[name] = p.Parse(buf)
+		} else {
+			// 如果Parse方法不存在，则默认该参数只有一个bit位
+			results[name] = buf[0]
+		}
+	}
+}
+
+func (b *BitRwRegister) GetName() string {
+	return b.Name
+}
+
+func (b *BitRwRegister) Verify(params map[string]interface{}) error {
+	for _, p := range b.Params {
+		name := p.Name
+		value := params[name]
+		if p.Validate != nil {
+			if err := p.Validate(value); err != nil {
+				return err
+			}
+			continue
+		}
+		// 如果Pares方法不存在，默认按照单个bit位来处理
+		switch value.(type) {
+		case int:
+			i := value.(int)
+			// 1个字节的数值范围
+			if i < 0 || i > 255 {
+				return fmt.Errorf("参数 %v  范围越界，期望: 0～255,实际：%v", name, i)
+			}
+		case float64:
+			f64 := value.(float64)
+			// 1个字节的数值范围
+			if f64 < 0 || f64 > 255 {
+				return fmt.Errorf("参数 %v  范围越界，期望: 0～255,实际：%v", name, f64)
+			}
+		default:
+			panic(fmt.Sprintf("不支持的参数类型：%v", reflect.TypeOf(value)))
+		}
+	}
+	return nil
+}
+
+func (b *BitRwRegister) Encode(params map[string]interface{}) []byte {
+	buf := make([]byte, 2)
+	for _, p := range b.Params {
+		name := p.Name
+		value := params[name]
+		if p.Bytes != nil {
+			p.Bytes(value, buf)
+		} else {
+			var byteValue byte
+			switch value.(type) {
+			case int:
+				byteValue = byte(value.(int))
+			case float64:
+				byteValue = byte(value.(float64))
+			default:
+				//do nothing
+			}
+			buf = append(buf, byteValue)
+		}
+	}
+	return buf
 }
