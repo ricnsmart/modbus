@@ -223,7 +223,10 @@ func (s *StringRwRegister) Decode(data []byte, results map[string]interface{}) {
 }
 
 func (s *StringRwRegister) Verify(params map[string]interface{}) error {
-	value := params[s.Name]
+	value, ok := params[s.Name]
+	if !ok {
+		return fmt.Errorf("参数 %v 缺失", s.Name)
+	}
 	str, ok := value.(string)
 	if !ok {
 		return fmt.Errorf("参数类型错误，期望: string,实际：%v", reflect.TypeOf(value))
@@ -277,7 +280,10 @@ func (u *Uint16RwRegister) Decode(data []byte, results map[string]interface{}) {
 }
 
 func (u *Uint16RwRegister) Verify(params map[string]interface{}) error {
-	value := params[u.Name]
+	value, ok := params[u.Name]
+	if !ok {
+		return fmt.Errorf("参数 %v 缺失", u.Name)
+	}
 	f64, ok := value.(float64)
 	if !ok {
 		return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
@@ -342,7 +348,10 @@ func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
 	}
 	for _, p := range b.Params {
 		name := p.Name
-		value := params[name]
+		value, ok := params[name]
+		if !ok {
+			return fmt.Errorf("参数 %v 缺失", name)
+		}
 
 		f64, ok := value.(float64)
 		if !ok {
@@ -402,7 +411,10 @@ func (f *Float32RwRegister) Decode(data []byte, results map[string]interface{}) 
 }
 
 func (f *Float32RwRegister) Verify(params map[string]interface{}) error {
-	value := params[f.Name]
+	value, ok := params[f.Name]
+	if !ok {
+		return fmt.Errorf("参数 %v 缺失", f.Name)
+	}
 	f64, ok := value.(float64)
 	if !ok {
 		return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
@@ -470,7 +482,10 @@ func (b *BitRwRegister) GetName() string {
 func (b *BitRwRegister) Verify(params map[string]interface{}) error {
 	for _, p := range b.Params {
 		name := p.Name
-		value := params[name]
+		value, ok := params[name]
+		if !ok {
+			return fmt.Errorf("参数 %v 缺失", name)
+		}
 		if p.Validate == nil {
 			panic("BitRwRegister类型必须申明Validate()方法")
 		}
