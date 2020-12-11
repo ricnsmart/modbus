@@ -187,7 +187,7 @@ func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface
 }
 
 func (rws ReadableAndWritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
-	result := make([]byte, rws.GetNum())
+	result := make([]byte, rws.GetNum()*2)
 	for _, w := range rws {
 		if err := w.Verify(params); err != nil {
 			return nil, err
