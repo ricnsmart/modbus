@@ -35,10 +35,10 @@ type ReadableRegister interface {
 	Readable
 }
 
+// 必须是相邻的寄存器，中间可以出现预留空白寄存器
 type ReadableRegisters []ReadableRegister
 
-// 必须是连续的寄存器才能读取
-// 将可度寄存器转换为读取寄存器标准modbus报文
+// 将可读寄存器转换为读取寄存器标准modbus报文
 func (rs ReadableRegisters) ReadBytes(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rs.GetStart(), rs.GetNum())
@@ -50,11 +50,11 @@ func (rs ReadableRegisters) GetStart() uint16 {
 }
 
 func (rs ReadableRegisters) GetNum() uint16 {
-	var result uint16
-	for _, r := range rs {
-		result = result + r.GetNum()
-	}
-	return result
+	// 最后一个寄存器-最开始的寄存器 = 总共的寄存器数量
+	// 这种算法可以包括 即使中间有预留寄存器的情况
+	last := rs[len(rs)-1]
+	lastRegister := last.GetStart() + last.GetNum() - 1
+	return lastRegister - rs[0].GetStart() + 1
 }
 
 // 必须是连续的寄存器才能读取
@@ -102,6 +102,7 @@ type WritableRegister interface {
 	Writable
 }
 
+// 必须是相邻的寄存器，中间可以出现预留空白寄存器
 type WritableRegisters []WritableRegister
 
 func (ws WritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
@@ -120,11 +121,9 @@ func (ws WritableRegisters) GetStart() uint16 {
 }
 
 func (ws WritableRegisters) GetNum() uint16 {
-	var result uint16
-	for _, r := range ws {
-		result = result + r.GetNum()
-	}
-	return result
+	last := ws[len(ws)-1]
+	lastRegister := last.GetStart() + last.GetNum() - 1
+	return lastRegister - ws[0].GetStart() + 1
 }
 
 // 将可写寄存器转换为写入寄存器标准modbus报文
@@ -144,6 +143,7 @@ type ReadableAndWritableRegister interface {
 	Writable
 }
 
+// 必须是相邻的寄存器，中间可以出现预留空白寄存器
 type ReadableAndWritableRegisters []ReadableAndWritableRegister
 
 func (rws ReadableAndWritableRegisters) GetStart() uint16 {
@@ -151,11 +151,9 @@ func (rws ReadableAndWritableRegisters) GetStart() uint16 {
 }
 
 func (rws ReadableAndWritableRegisters) GetNum() uint16 {
-	var result uint16
-	for _, r := range rws {
-		result = result + r.GetNum()
-	}
-	return result
+	last := rws[len(rws)-1]
+	lastRegister := last.GetStart() + last.GetNum() - 1
+	return lastRegister - rws[0].GetStart() + 1
 }
 
 // 必须是连续的寄存器才能读取
