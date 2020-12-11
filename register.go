@@ -27,7 +27,7 @@ type Writable interface {
 	// 单个寄存器，每个比特代表不同参数的情况
 	// 所以使用map来作为输入值，让寄存器自行取用输入值
 	Verify(params map[string]interface{}) error
-	Encode(params map[string]interface{}) []byte
+	Encode(params map[string]interface{}, dst []byte)
 }
 
 type ReadableRegister interface {
@@ -106,12 +106,15 @@ type WritableRegister interface {
 type WritableRegisters []WritableRegister
 
 func (ws WritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
-	result := make([]byte, 0)
+	result := make([]byte, ws.GetNum()*2)
 	for _, w := range ws {
 		if err := w.Verify(params); err != nil {
 			return nil, err
 		}
-		result = append(result, w.Encode(params)...)
+		// 相对位置
+		start := (w.GetStart() - ws.GetStart()) * 2
+		end := start + w.GetNum()*2
+		w.Encode(params, result[start:end])
 	}
 	return result, nil
 }
@@ -184,12 +187,15 @@ func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface
 }
 
 func (rws ReadableAndWritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
-	result := make([]byte, 0)
+	result := make([]byte, rws.GetNum())
 	for _, w := range rws {
 		if err := w.Verify(params); err != nil {
 			return nil, err
 		}
-		result = append(result, w.Encode(params)...)
+		// 相对位置
+		start := (w.GetStart() - rws.GetStart()) * 2
+		end := start + w.GetNum()*2
+		w.Encode(params, result[start:end])
 	}
 	return result, nil
 }
@@ -235,14 +241,12 @@ func (s *StringRwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (s *StringRwRegister) Encode(params map[string]interface{}) []byte {
+func (s *StringRwRegister) Encode(params map[string]interface{}, dst []byte) {
 	value := params[s.Name]
-	dst := make([]byte, s.Num*2)
 	if s.Bytes == nil {
 		panic("StringRwRegister类型必须申明Bytes()方法")
 	}
 	s.Bytes(value.(string), dst)
-	return dst
 }
 
 type Uint16RwRegister struct {
@@ -296,11 +300,9 @@ func (u *Uint16RwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (u *Uint16RwRegister) Encode(params map[string]interface{}) []byte {
+func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) {
 	value := params[u.Name]
-	b := make([]byte, 2)
-	u.Order.PutUint16(b, uint16(value.(float64)))
-	return b
+	u.Order.PutUint16(dst, uint16(value.(float64)))
 }
 
 type Param struct {
@@ -367,12 +369,10 @@ func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (b *DoubleParamRwRegister) Encode(params map[string]interface{}) []byte {
-	buf := make([]byte, 2)
+func (b *DoubleParamRwRegister) Encode(params map[string]interface{}, dst []byte) {
 	for index, p := range b.Params {
-		buf[index] = byte(params[p.Name].(float64))
+		dst[index] = byte(params[p.Name].(float64))
 	}
-	return buf
 }
 
 type Float32RwRegister struct {
@@ -423,13 +423,10 @@ func (f *Float32RwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (f *Float32RwRegister) Encode(params map[string]interface{}) []byte {
+func (f *Float32RwRegister) Encode(params map[string]interface{}, dst []byte) {
 	value := params[f.Name]
 	bits := math.Float32bits(float32(value.(float64)))
-
-	bytes := make([]byte, 4)
-	f.Order.PutUint32(bytes, bits)
-	return bytes
+	f.Order.PutUint32(dst, bits)
 }
 
 // 一个寄存器，2个字节，16个比特, 其中包含了多个参数
@@ -495,8 +492,7 @@ func (b *BitRwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (b *BitRwRegister) Encode(params map[string]interface{}) []byte {
-	dst := make([]byte, 2)
+func (b *BitRwRegister) Encode(params map[string]interface{}, dst []byte) {
 	for _, p := range b.Params {
 		name := p.Name
 		value := params[name]
@@ -505,5 +501,4 @@ func (b *BitRwRegister) Encode(params map[string]interface{}) []byte {
 		}
 		p.Bytes(value, dst)
 	}
-	return dst
 }
