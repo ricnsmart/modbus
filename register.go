@@ -7,6 +7,12 @@ import (
 	"reflect"
 )
 
+// MODBUS数据域采用“BIG INDIAN”模式，即高位字节在前低位字节在后。例如:
+// 1个16位寄存器包含数值为0x12AB 寄存器数值发送顺序为:
+// 高位字节= 0x12
+// 低位字节= 0xAB
+// 但有时因为厂商自定义协议的关系，可能需要使用小断
+// 这时修改寄存器Order（binary.ByteOrder）参数即可
 type Register interface {
 	// 获取寄存器地址
 	GetStart() uint16
@@ -86,7 +92,7 @@ func (f *Float32RoRegister) GetNum() uint16 {
 
 func (f *Float32RoRegister) Decode(data []byte, results map[string]interface{}) {
 	if f.Order == nil {
-		panic("该寄存器必须申明大小端模式")
+		f.Order = binary.BigEndian
 	}
 	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
@@ -271,7 +277,7 @@ func (u *Uint16RwRegister) GetNum() uint16 {
 
 func (u *Uint16RwRegister) Decode(data []byte, results map[string]interface{}) {
 	if u.Order == nil {
-		panic("该寄存器必须申明大小端模式")
+		u.Order = binary.BigEndian
 	}
 	ui16 := u.Order.Uint16(data)
 	if u.Parse != nil {
@@ -302,6 +308,9 @@ func (u *Uint16RwRegister) Verify(params map[string]interface{}) error {
 
 func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) {
 	value := params[u.Name]
+	if u.Order == nil {
+		u.Order = binary.BigEndian
+	}
 	u.Order.PutUint16(dst, uint16(value.(float64)))
 }
 
@@ -312,7 +321,6 @@ type Param struct {
 
 // 单个寄存器，两个字节代表两个参数
 // 注意：Params长度必须<=2
-// 无需考虑大小端，因为可以调整参数顺序
 type DoubleParamRwRegister struct {
 	Name   string
 	Start  uint16
@@ -344,7 +352,7 @@ func (b *DoubleParamRwRegister) Decode(data []byte, results map[string]interface
 
 func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
 	if len(b.Params) > 2 {
-		panic("DoubleParamRwRegister must have two params")
+		panic("DoubleParamRwRegister must have less than 2 params")
 	}
 	for _, p := range b.Params {
 		name := p.Name
@@ -397,7 +405,7 @@ func (f *Float32RwRegister) GetNum() uint16 {
 
 func (f *Float32RwRegister) Decode(data []byte, results map[string]interface{}) {
 	if f.Order == nil {
-		panic("该寄存器必须申明大小端模式")
+		f.Order = binary.BigEndian
 	}
 	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
@@ -426,12 +434,14 @@ func (f *Float32RwRegister) Verify(params map[string]interface{}) error {
 func (f *Float32RwRegister) Encode(params map[string]interface{}, dst []byte) {
 	value := params[f.Name]
 	bits := math.Float32bits(float32(value.(float64)))
+	if f.Order == nil {
+		f.Order = binary.BigEndian
+	}
 	f.Order.PutUint32(dst, bits)
 }
 
 // 一个寄存器，2个字节，16个比特, 其中包含了多个参数
 // Params长度小于16
-// 由调用方去处理大小端问题
 type BitRwRegister struct {
 	Name   string
 	Start  uint16
@@ -461,6 +471,20 @@ func (b *BitRwRegister) Decode(data []byte, results map[string]interface{}) {
 	}
 	for _, p := range b.Params {
 		name := p.Name
+
+		buf := make([]byte, p.Len)
+
+		for k := uint8(0); k < p.Len; k++ {
+			i := p.Start + k
+			j := 0
+			if i >= 8 {
+				i = i - 8
+				j = 1
+			}
+
+			bit := data[j] >> uint(i) & 1
+			buf = append(buf, bit)
+		}
 
 		if p.Parse == nil {
 			panic("BitRwRegister类型必须申明Parse()方法")
