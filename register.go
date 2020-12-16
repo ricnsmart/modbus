@@ -348,7 +348,10 @@ func (b *DoubleParamRwRegister) Decode(data []byte, results map[string]interface
 	// 边界检查
 	_ = data[1]
 	for index, p := range b.Params {
-		results[p.Name] = data[index]
+		if p.Parse == nil {
+			panic("ByteParam 必须提供Parse方法")
+		}
+		results[p.Name] = p.Parse(data[index])
 	}
 }
 
