@@ -314,9 +314,11 @@ func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) {
 	u.Order.PutUint16(dst, uint16(value.(float64)))
 }
 
-type Param struct {
+type ByteParam struct {
 	Name     string
-	Validate func(value byte) error
+	Validate func(value interface{}) error
+	Parse    func(data byte) interface{}
+	Bytes    func(value interface{}) byte
 }
 
 // 单个寄存器，两个字节代表两个参数
@@ -324,7 +326,7 @@ type Param struct {
 type DoubleParamRwRegister struct {
 	Name   string
 	Start  uint16
-	Params []Param
+	Params []ByteParam
 }
 
 func (b *DoubleParamRwRegister) GetName() string {
@@ -361,17 +363,11 @@ func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
 			return fmt.Errorf("参数 %v 缺失", name)
 		}
 
-		f64, ok := value.(float64)
-		if !ok {
-			return fmt.Errorf("参数 %v 类型错误，期望: float64,实际：%v", name, reflect.TypeOf(value))
+		if p.Validate == nil {
+			panic("ByteParam 必须提供Validate方法")
 		}
-		// 1个字节的数值范围
-		if f64 < 0 || f64 > 255 {
-			return fmt.Errorf("参数 %v  范围越界，期望: 0～255,实际：%v", name, f64)
-		}
-		if p.Validate != nil {
-			return p.Validate(byte(value.(float64)))
-		}
+
+		return p.Validate(value)
 	}
 
 	return nil
@@ -379,7 +375,10 @@ func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
 
 func (b *DoubleParamRwRegister) Encode(params map[string]interface{}, dst []byte) {
 	for index, p := range b.Params {
-		dst[index] = byte(params[p.Name].(float64))
+		if p.Bytes == nil {
+			panic("ByteParam 必须提供Bytes方法")
+		}
+		dst[index] = p.Bytes(params[p.Name])
 	}
 }
 
