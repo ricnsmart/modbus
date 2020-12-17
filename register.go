@@ -102,6 +102,77 @@ func (f *Float32RoRegister) Decode(data []byte, results map[string]interface{}) 
 	}
 }
 
+type Uint16RoRegister struct {
+	Name  string
+	Start uint16
+	Order binary.ByteOrder
+	Get   func(value uint16) interface{}
+}
+
+func (u *Uint16RoRegister) GetName() string {
+	return u.Name
+}
+
+func (u *Uint16RoRegister) GetStart() uint16 {
+	return u.Start
+}
+
+func (u *Uint16RoRegister) GetNum() uint16 {
+	return 1
+}
+
+func (u *Uint16RoRegister) Decode(data []byte, results map[string]interface{}) {
+	if u.Order == nil {
+		u.Order = binary.BigEndian
+	}
+	ui16 := u.Order.Uint16(data)
+	if u.Get != nil {
+		results[u.Name] = u.Get(ui16)
+	} else {
+		results[u.Name] = ui16
+	}
+}
+
+type ByteRoParam struct {
+	Name string
+	Get  func(data byte) interface{}
+}
+
+// 单个寄存器，两个字节代表两个参数
+// 注意：Params长度必须<=2
+type DoubleParamRoRegister struct {
+	Name   string
+	Start  uint16
+	Params []ByteRoParam
+}
+
+func (b *DoubleParamRoRegister) GetName() string {
+	return b.Name
+}
+
+func (b *DoubleParamRoRegister) GetStart() uint16 {
+	return b.Start
+}
+
+func (b *DoubleParamRoRegister) GetNum() uint16 {
+	return 1
+}
+
+func (b *DoubleParamRoRegister) Decode(data []byte, results map[string]interface{}) {
+	if len(b.Params) > 2 {
+		panic(fmt.Sprintf("DoubleParamRwRegister must have less than 2 params,actual: %v", len(b.Params)))
+	}
+	// 边界检查
+	_ = data[1]
+	for index, p := range b.Params {
+		if p.Get == nil {
+			results[p.Name] = data[index]
+		} else {
+			results[p.Name] = p.Get(data[index])
+		}
+	}
+}
+
 type WritableRegister interface {
 	Register
 	Writable
@@ -315,7 +386,7 @@ func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) err
 	return nil
 }
 
-type ByteParam struct {
+type ByteRwParam struct {
 	Name string
 	Get  func(data byte) interface{}
 	Set  func(value interface{}) (byte, error)
@@ -326,7 +397,7 @@ type ByteParam struct {
 type DoubleParamRwRegister struct {
 	Name   string
 	Start  uint16
-	Params []ByteParam
+	Params []ByteRwParam
 }
 
 func (b *DoubleParamRwRegister) GetName() string {
@@ -349,9 +420,10 @@ func (b *DoubleParamRwRegister) Decode(data []byte, results map[string]interface
 	_ = data[1]
 	for index, p := range b.Params {
 		if p.Get == nil {
-			panic("ByteParam 必须提供Get方法")
+			results[p.Name] = data[index]
+		} else {
+			results[p.Name] = p.Get(data[index])
 		}
-		results[p.Name] = p.Get(data[index])
 	}
 }
 
@@ -368,12 +440,20 @@ func (b *DoubleParamRwRegister) Encode(params map[string]interface{}, dst []byte
 		}
 
 		if p.Set == nil {
-			panic("ByteParam 必须提供Set方法")
-		}
-		var err error
-		dst[index], err = p.Set(value)
-		if err != nil {
-			return err
+			f64, ok := value.(float64)
+			if !ok {
+				return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
+			}
+			if f64 < 0 || f64 > 255 {
+				return fmt.Errorf("参数值错误，期望: 0～255,实际：%v", f64)
+			}
+			dst[index] = byte(f64)
+		} else {
+			var err error
+			dst[index], err = p.Set(value)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
