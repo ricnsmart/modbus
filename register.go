@@ -14,6 +14,7 @@ import (
 // 但有时因为厂商自定义协议的关系，可能需要使用小断
 // 这时修改寄存器Order（binary.ByteOrder）参数即可
 type Register interface {
+	GetName() string
 	// 获取寄存器地址
 	GetStart() uint16
 	// 获取寄存器数量
@@ -28,7 +29,6 @@ type Readable interface {
 }
 
 type Writable interface {
-	GetName() string
 	// 为了适应单个寄存器，两个字节代表2个参数的情况和
 	// 单个寄存器，每个比特代表不同参数的情况
 	// 所以使用map来作为输入值，让寄存器自行取用输入值
@@ -198,6 +198,62 @@ func (s *StringRoRegister) Decode(data []byte, results map[string]interface{}) {
 		panic("StringRwRegister类型必须申明Get方法")
 	}
 	results[s.Name] = s.Get(data)
+}
+
+// 一个寄存器，2个字节，16个比特, 其中包含了多个参数
+// Params长度小于16
+type BitRoRegister struct {
+	Name   string
+	Start  uint16
+	Order  binary.ByteOrder
+	Params []BitRoParam
+}
+
+type BitRoParam struct {
+	Name  string
+	Start uint8
+	Len   uint8
+	Get   func(data []byte) interface{}
+}
+
+func (b *BitRoRegister) GetName() string {
+	return b.Name
+}
+
+func (b *BitRoRegister) GetStart() uint16 {
+	return b.Start
+}
+
+func (b *BitRoRegister) GetNum() uint16 {
+	return 1
+}
+
+func (b *BitRoRegister) Decode(data []byte, results map[string]interface{}) {
+	if len(b.Params) > 16 {
+		panic(fmt.Sprintf("BitRwRegister must have less than 16 params,actual: %v", len(b.Params)))
+	}
+	if b.Order == nil {
+		b.Order = binary.BigEndian
+	}
+	u16 := b.Order.Uint16(data)
+
+	for _, p := range b.Params {
+		name := p.Name
+
+		buf := make([]byte, p.Len)
+
+		for k := uint8(0); k < p.Len; k++ {
+			index := p.Start + k
+			bit := u16 >> uint(index) & 1
+			buf[k] = byte(bit)
+		}
+
+		if p.Get == nil {
+			panic("BitRwRegister类型必须申明Get方法")
+		}
+
+		results[name] = p.Get(buf)
+	}
 }
 
 type WritableRegister interface {
@@ -574,10 +630,10 @@ type BitRwRegister struct {
 	Name   string
 	Start  uint16
 	Order  binary.ByteOrder
-	Params []BitParam
+	Params []BitRwParam
 }
 
-type BitParam struct {
+type BitRwParam struct {
 	Name  string
 	Start uint8
 	Len   uint8

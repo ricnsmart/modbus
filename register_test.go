@@ -18,7 +18,7 @@ var (
 	ProtectionSwitchTrip = &BitRwRegister{
 		Name:  "ProtectionSwitchTrip",
 		Start: 0x0200,
-		Params: []BitParam{
+		Params: []BitRwParam{
 			{
 				Name:  "LeakageProtection",
 				Start: 0,
