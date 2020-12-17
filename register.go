@@ -173,6 +173,33 @@ func (b *DoubleParamRoRegister) Decode(data []byte, results map[string]interface
 	}
 }
 
+// 由调用方去处理大小端问题
+type StringRoRegister struct {
+	Name  string
+	Start uint16
+	Num   uint16
+	Get   func(data []byte) string
+}
+
+func (s *StringRoRegister) GetName() string {
+	return s.Name
+}
+
+func (s *StringRoRegister) GetStart() uint16 {
+	return s.Start
+}
+
+func (s *StringRoRegister) GetNum() uint16 {
+	return s.Num
+}
+
+func (s *StringRoRegister) Decode(data []byte, results map[string]interface{}) {
+	if s.Get == nil {
+		panic("StringRwRegister类型必须申明Get方法")
+	}
+	results[s.Name] = s.Get(data)
+}
+
 type WritableRegister interface {
 	Register
 	Writable
