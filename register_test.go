@@ -100,17 +100,6 @@ func getProtectionStatus(data []byte) interface{} {
 	}
 }
 
-func validateProtectionStatus(value interface{}) error {
-	str, ok := value.(string)
-	if !ok {
-		return fmt.Errorf("参数类型错误，期望: string,实际：%v", reflect.TypeOf(value))
-	}
-	if str != "不分闸" && str != "延时分闸" {
-		return fmt.Errorf("参数值错误，期望: 不分闸或延时分闸,实际：%v", str)
-	}
-	return nil
-}
-
 func transferProtectionStatus(value interface{}) ([]byte, error) {
 	str, ok := value.(string)
 	if !ok {
