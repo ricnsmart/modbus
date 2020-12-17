@@ -485,7 +485,7 @@ func (b *BitRwRegister) Decode(data []byte, results map[string]interface{}) {
 		for k := uint8(0); k < p.Len; k++ {
 			index := p.Start + k
 			bit := u16 >> uint(index) & 1
-			buf = append(buf, byte(bit))
+			buf[k] = byte(bit)
 		}
 
 		if p.Parse == nil {
