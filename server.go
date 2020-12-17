@@ -231,6 +231,7 @@ func (s *Server) DownloadCommand(remoteAddr string, in []byte) (out []byte, err 
 			c.inDownloading.setTrue()
 
 			if err = c.receiveCmd(in); err != nil {
+				c.inDownloading.setFalse()
 				return
 			}
 
