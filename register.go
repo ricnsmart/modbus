@@ -252,7 +252,7 @@ type Uint16RwRegister struct {
 	Order    binary.ByteOrder
 	Get      func(value uint16) interface{}
 	Set      func(value interface{}) (uint16, error)
-	validate func(value uint16) error
+	Validate func(value uint16) error
 }
 
 func (u *Uint16RwRegister) GetName() string {
@@ -296,8 +296,8 @@ func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) err
 		}
 		u16 = uint16(f64)
 
-		if u.validate != nil {
-			if err := u.validate(u16); err != nil {
+		if u.Validate != nil {
+			if err := u.Validate(u16); err != nil {
 				return err
 			}
 		}
