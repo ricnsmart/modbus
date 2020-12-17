@@ -20,36 +20,32 @@ var (
 		Start: 0x0200,
 		Params: []BitParam{
 			{
-				Name:     "LeakageProtection",
-				Start:    0,
-				Len:      2,
-				Parse:    getProtectionStatus,
-				Validate: validateProtectionStatus,
-				Bytes:    transferProtectionStatus,
+				Name:  "LeakageProtection",
+				Start: 0,
+				Len:   2,
+				Get:   getProtectionStatus,
+				Set:   transferProtectionStatus,
 			},
 			{
-				Name:     "TemperatureProtection",
-				Start:    2,
-				Len:      2,
-				Parse:    getProtectionStatus,
-				Validate: validateProtectionStatus,
-				Bytes:    transferProtectionStatus,
+				Name:  "TemperatureProtection",
+				Start: 2,
+				Len:   2,
+				Get:   getProtectionStatus,
+				Set:   transferProtectionStatus,
 			},
 			{
-				Name:     "VoltageProtection",
-				Start:    4,
-				Len:      2,
-				Parse:    getProtectionStatus,
-				Validate: validateProtectionStatus,
-				Bytes:    transferProtectionStatus,
+				Name:  "VoltageProtection",
+				Start: 4,
+				Len:   2,
+				Get:   getProtectionStatus,
+				Set:   transferProtectionStatus,
 			},
 			{
-				Name:     "OverloadProtection",
-				Start:    6,
-				Len:      2,
-				Parse:    getProtectionStatus,
-				Validate: validateProtectionStatus,
-				Bytes:    transferProtectionStatus,
+				Name:  "OverloadProtection",
+				Start: 6,
+				Len:   2,
+				Get:   getProtectionStatus,
+				Set:   transferProtectionStatus,
 			},
 		},
 	}
@@ -81,7 +77,9 @@ func TestBitRwRegister_Encode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		dst := make([]byte, 2)
-		ProtectionSwitchTrip.Encode(tt.params, dst)
+		if err := ProtectionSwitchTrip.Encode(tt.params, dst); err != nil {
+			t.Errorf("Encode failed ：%v", err)
+		}
 		if !reflect.DeepEqual(dst, tt.dst) {
 			t.Errorf("Encode error 期望：%v,实际：%v", tt.dst, dst)
 		}
@@ -113,13 +111,17 @@ func validateProtectionStatus(value interface{}) error {
 	return nil
 }
 
-func transferProtectionStatus(value interface{}) []byte {
-	switch value.(string) {
+func transferProtectionStatus(value interface{}) ([]byte, error) {
+	str, ok := value.(string)
+	if !ok {
+		return nil, fmt.Errorf("参数类型错误，期望: string,实际：%v", reflect.TypeOf(value))
+	}
+	switch str {
 	case "不分闸":
-		return []byte{0, 0}
+		return []byte{0, 0}, nil
 	case "延时分闸":
-		return []byte{0, 1}
+		return []byte{0, 1}, nil
 	default:
-		panic(fmt.Errorf("参数值错误，期望: 不分闸或延时分闸,实际：%v", value))
+		return nil, fmt.Errorf("参数值错误，期望: 不分闸或延时分闸,实际：%v", value)
 	}
 }

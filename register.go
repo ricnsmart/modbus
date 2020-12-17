@@ -32,8 +32,7 @@ type Writable interface {
 	// 为了适应单个寄存器，两个字节代表2个参数的情况和
 	// 单个寄存器，每个比特代表不同参数的情况
 	// 所以使用map来作为输入值，让寄存器自行取用输入值
-	Verify(params map[string]interface{}) error
-	Encode(params map[string]interface{}, dst []byte)
+	Encode(params map[string]interface{}, dst []byte) error
 }
 
 type ReadableRegister interface {
@@ -79,7 +78,7 @@ type Float32RoRegister struct {
 	Start uint16
 	Num   uint16
 	Order binary.ByteOrder
-	Parse func(data float32) interface{}
+	Get   func(value float32) interface{}
 }
 
 func (f *Float32RoRegister) GetStart() uint16 {
@@ -96,8 +95,8 @@ func (f *Float32RoRegister) Decode(data []byte, results map[string]interface{}) 
 	}
 	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
-	if f.Parse != nil {
-		results[f.Name] = f.Parse(f32)
+	if f.Get != nil {
+		results[f.Name] = f.Get(f32)
 	} else {
 		results[f.Name] = f32
 	}
@@ -114,13 +113,12 @@ type WritableRegisters []WritableRegister
 func (ws WritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
 	result := make([]byte, ws.GetNum()*2)
 	for _, w := range ws {
-		if err := w.Verify(params); err != nil {
-			return nil, err
-		}
 		// 相对位置
 		start := (w.GetStart() - ws.GetStart()) * 2
 		end := start + w.GetNum()*2
-		w.Encode(params, result[start:end])
+		if err := w.Encode(params, result[start:end]); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -195,25 +193,23 @@ func (rws ReadableAndWritableRegisters) Decode(data []byte) map[string]interface
 func (rws ReadableAndWritableRegisters) Encode(params map[string]interface{}) ([]byte, error) {
 	result := make([]byte, rws.GetNum()*2)
 	for _, w := range rws {
-		if err := w.Verify(params); err != nil {
-			return nil, err
-		}
 		// 相对位置
 		start := (w.GetStart() - rws.GetStart()) * 2
 		end := start + w.GetNum()*2
-		w.Encode(params, result[start:end])
+		if err := w.Encode(params, result[start:end]); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
 
 // 由调用方去处理大小端问题
 type StringRwRegister struct {
-	Name     string
-	Start    uint16
-	Num      uint16
-	Parse    func(data []byte) string
-	Validate func(value string) error
-	Bytes    func(value string, dst []byte)
+	Name  string
+	Start uint16
+	Num   uint16
+	Get   func(data []byte) string
+	Set   func(value string, dst []byte) error
 }
 
 func (s *StringRwRegister) GetName() string {
@@ -229,10 +225,13 @@ func (s *StringRwRegister) GetNum() uint16 {
 }
 
 func (s *StringRwRegister) Decode(data []byte, results map[string]interface{}) {
-	results[s.Name] = s.Parse(data)
+	if s.Get == nil {
+		panic("StringRwRegister类型必须申明Get方法")
+	}
+	results[s.Name] = s.Get(data)
 }
 
-func (s *StringRwRegister) Verify(params map[string]interface{}) error {
+func (s *StringRwRegister) Encode(params map[string]interface{}, dst []byte) error {
 	value, ok := params[s.Name]
 	if !ok {
 		return fmt.Errorf("参数 %v 缺失", s.Name)
@@ -241,26 +240,19 @@ func (s *StringRwRegister) Verify(params map[string]interface{}) error {
 	if !ok {
 		return fmt.Errorf("参数类型错误，期望: string,实际：%v", reflect.TypeOf(value))
 	}
-	if s.Validate != nil {
-		return s.Validate(str)
+	if s.Set == nil {
+		panic("StringRwRegister类型必须申明Set方法")
 	}
-	return nil
-}
-
-func (s *StringRwRegister) Encode(params map[string]interface{}, dst []byte) {
-	value := params[s.Name]
-	if s.Bytes == nil {
-		panic("StringRwRegister类型必须申明Bytes()方法")
-	}
-	s.Bytes(value.(string), dst)
+	return s.Set(str, dst)
 }
 
 type Uint16RwRegister struct {
 	Name     string
 	Start    uint16
 	Order    binary.ByteOrder
-	Parse    func(data uint16) interface{}
-	Validate func(value uint16) error
+	Get      func(value uint16) interface{}
+	Set      func(value interface{}) (uint16, error)
+	validate func(value uint16) error
 }
 
 func (u *Uint16RwRegister) GetName() string {
@@ -280,45 +272,53 @@ func (u *Uint16RwRegister) Decode(data []byte, results map[string]interface{}) {
 		u.Order = binary.BigEndian
 	}
 	ui16 := u.Order.Uint16(data)
-	if u.Parse != nil {
-		results[u.Name] = u.Parse(ui16)
+	if u.Get != nil {
+		results[u.Name] = u.Get(ui16)
 	} else {
 		results[u.Name] = ui16
 	}
 }
 
-func (u *Uint16RwRegister) Verify(params map[string]interface{}) error {
+func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) error {
 	value, ok := params[u.Name]
 	if !ok {
 		return fmt.Errorf("参数 %v 缺失", u.Name)
 	}
-	f64, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
-	}
-	// 实际是uint16的数值范围
-	if f64 <= 0 || f64 > 65536 {
-		return fmt.Errorf("参数范围越界，期望: 0～65536,实际：%v", f64)
-	}
-	if u.Validate != nil {
-		return u.Validate(uint16(f64))
-	}
-	return nil
-}
+	var u16 uint16
+	if u.Set == nil {
+		f64, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
+		}
+		// 实际是uint16的数值范围
+		if f64 <= 0 || f64 > 65536 {
+			return fmt.Errorf("参数范围越界，期望: 0～65536,实际：%v", f64)
+		}
+		u16 = uint16(f64)
 
-func (u *Uint16RwRegister) Encode(params map[string]interface{}, dst []byte) {
-	value := params[u.Name]
+		if u.validate != nil {
+			if err := u.validate(u16); err != nil {
+				return err
+			}
+		}
+	} else {
+		result, err := u.Set(value)
+		if err != nil {
+			return err
+		}
+		u16 = result
+	}
 	if u.Order == nil {
 		u.Order = binary.BigEndian
 	}
-	u.Order.PutUint16(dst, uint16(value.(float64)))
+	u.Order.PutUint16(dst, u16)
+	return nil
 }
 
 type ByteParam struct {
-	Name     string
-	Validate func(value interface{}) error
-	Parse    func(data byte) interface{}
-	Bytes    func(value interface{}) byte
+	Name string
+	Get  func(data byte) interface{}
+	Set  func(value interface{}) (byte, error)
 }
 
 // 单个寄存器，两个字节代表两个参数
@@ -348,48 +348,43 @@ func (b *DoubleParamRwRegister) Decode(data []byte, results map[string]interface
 	// 边界检查
 	_ = data[1]
 	for index, p := range b.Params {
-		if p.Parse == nil {
-			panic("ByteParam 必须提供Parse方法")
+		if p.Get == nil {
+			panic("ByteParam 必须提供Get方法")
 		}
-		results[p.Name] = p.Parse(data[index])
+		results[p.Name] = p.Get(data[index])
 	}
 }
 
-func (b *DoubleParamRwRegister) Verify(params map[string]interface{}) error {
+func (b *DoubleParamRwRegister) Encode(params map[string]interface{}, dst []byte) error {
 	if len(b.Params) > 2 {
 		panic("DoubleParamRwRegister must have less than 2 params")
 	}
-	for _, p := range b.Params {
+
+	for index, p := range b.Params {
 		name := p.Name
 		value, ok := params[name]
 		if !ok {
 			return fmt.Errorf("参数 %v 缺失", name)
 		}
 
-		if p.Validate == nil {
-			panic("ByteParam 必须提供Validate方法")
+		if p.Set == nil {
+			panic("ByteParam 必须提供Set方法")
 		}
-
-		return p.Validate(value)
+		var err error
+		dst[index], err = p.Set(value)
+		if err != nil {
+			return err
+		}
 	}
-
 	return nil
-}
-
-func (b *DoubleParamRwRegister) Encode(params map[string]interface{}, dst []byte) {
-	for index, p := range b.Params {
-		if p.Bytes == nil {
-			panic("ByteParam 必须提供Bytes方法")
-		}
-		dst[index] = p.Bytes(params[p.Name])
-	}
 }
 
 type Float32RwRegister struct {
 	Name     string
 	Start    uint16
 	Order    binary.ByteOrder
-	Parse    func(data float32) byte
+	Get      func(data float32) interface{}
+	Set      func(value interface{}) (float32, error)
 	Validate func(value float32) error
 }
 
@@ -411,8 +406,8 @@ func (f *Float32RwRegister) Decode(data []byte, results map[string]interface{}) 
 	}
 	bits := f.Order.Uint32(data)
 	f32 := math.Float32frombits(bits)
-	if f.Parse != nil {
-		results[f.Name] = f.Parse(f32)
+	if f.Get != nil {
+		results[f.Name] = f.Get(f32)
 	} else {
 		results[f.Name] = f32
 	}
@@ -433,13 +428,37 @@ func (f *Float32RwRegister) Verify(params map[string]interface{}) error {
 	return nil
 }
 
-func (f *Float32RwRegister) Encode(params map[string]interface{}, dst []byte) {
-	value := params[f.Name]
-	bits := math.Float32bits(float32(value.(float64)))
+func (f *Float32RwRegister) Encode(params map[string]interface{}, dst []byte) error {
+	value, ok := params[f.Name]
+	if !ok {
+		return fmt.Errorf("参数 %v 缺失", f.Name)
+	}
+	var f32 float32
+	if f.Set == nil {
+		f64, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("参数类型错误，期望: float64,实际：%v", reflect.TypeOf(value))
+		}
+		f32 = float32(f64)
+		if f.Validate != nil {
+			if err := f.Validate(f32); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		var err error
+		f32, err = f.Set(value)
+		if err != nil {
+			return err
+		}
+	}
+	bits := math.Float32bits(f32)
 	if f.Order == nil {
 		f.Order = binary.BigEndian
 	}
 	f.Order.PutUint32(dst, bits)
+	return nil
 }
 
 // 一个寄存器，2个字节，16个比特, 其中包含了多个参数
@@ -452,12 +471,11 @@ type BitRwRegister struct {
 }
 
 type BitParam struct {
-	Name     string
-	Start    uint8
-	Len      uint8
-	Parse    func(data []byte) interface{}
-	Validate func(value interface{}) error
-	Bytes    func(value interface{}) []byte
+	Name  string
+	Start uint8
+	Len   uint8
+	Get   func(data []byte) interface{}
+	Set   func(value interface{}) ([]byte, error)
 }
 
 func (b *BitRwRegister) GetStart() uint16 {
@@ -488,11 +506,11 @@ func (b *BitRwRegister) Decode(data []byte, results map[string]interface{}) {
 			buf[k] = byte(bit)
 		}
 
-		if p.Parse == nil {
-			panic("BitRwRegister类型必须申明Parse()方法")
+		if p.Get == nil {
+			panic("BitRwRegister类型必须申明Get方法")
 		}
 
-		results[name] = p.Parse(buf)
+		results[name] = p.Get(buf)
 	}
 }
 
@@ -500,33 +518,21 @@ func (b *BitRwRegister) GetName() string {
 	return b.Name
 }
 
-func (b *BitRwRegister) Verify(params map[string]interface{}) error {
+func (b *BitRwRegister) Encode(params map[string]interface{}, dst []byte) error {
+	u16 := uint16(0)
 	for _, p := range b.Params {
 		name := p.Name
 		value, ok := params[name]
 		if !ok {
 			return fmt.Errorf("参数 %v 缺失", name)
 		}
-		if p.Validate == nil {
-			panic("BitRwRegister类型必须申明Validate()方法")
+		if p.Set == nil {
+			panic("BitRwRegister类型必须申明Set方法")
 		}
-		if err := p.Validate(value); err != nil {
+		buf, err := p.Set(value)
+		if err != nil {
 			return err
 		}
-		continue
-	}
-	return nil
-}
-
-func (b *BitRwRegister) Encode(params map[string]interface{}, dst []byte) {
-	u16 := uint16(0)
-	for _, p := range b.Params {
-		name := p.Name
-		value := params[name]
-		if p.Bytes == nil {
-			panic("BitRwRegister类型必须申明Bytes()方法")
-		}
-		buf := p.Bytes(value)
 		for k, v := range buf {
 			index := p.Start + uint8(k)
 			u16 = u16 | uint16(v<<index)
@@ -536,4 +542,5 @@ func (b *BitRwRegister) Encode(params map[string]interface{}, dst []byte) {
 		b.Order = binary.BigEndian
 	}
 	b.Order.PutUint16(dst, u16)
+	return nil
 }
