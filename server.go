@@ -308,7 +308,7 @@ func (c *conn) serve() {
 			const size = 64 << 10
 			buf := make([]byte, size)
 			buf = buf[:runtime.Stack(buf, false)]
-			c.server.error(fmt.Sprintf("modbus: panic serving %v: %v\n%setState", c.remoteAddr, err, buf))
+			c.server.error(fmt.Sprintf("modbus: panic serving %v: %v\n%s", c.remoteAddr, err, buf))
 		}
 	}()
 
