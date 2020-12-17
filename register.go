@@ -529,7 +529,7 @@ func (b *BitRwRegister) Encode(params map[string]interface{}, dst []byte) {
 		buf := p.Bytes(value)
 		for k, v := range buf {
 			index := p.Start + uint8(k)
-			u16 = u16 | uint16(v>>index)
+			u16 = u16 | uint16(v<<index)
 		}
 	}
 	if b.Order == nil {
