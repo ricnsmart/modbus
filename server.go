@@ -57,7 +57,7 @@ type (
 
 		commands [][]byte
 
-		handleCommandsResponse func(remoteAddr string, sm *sync.Map)
+		handleCommandsResponse func(remoteAddr string, response *sync.Map)
 
 		commandsInterval time.Duration // 命令下发间隔
 
@@ -469,7 +469,7 @@ func (s *Server) trackConn(c *conn, add bool) {
 }
 
 // 执行长期命令
-func (s *Server) ExecuteStandingCommands(commands [][]byte, interval time.Duration, f func(remoteAddr string, sm *sync.Map)) {
+func (s *Server) ExecuteStandingCommands(commands [][]byte, interval time.Duration, f func(remoteAddr string, response *sync.Map)) {
 	s.commands = commands
 	s.commandsInterval = interval
 	s.handleCommandsResponse = f
@@ -477,7 +477,7 @@ func (s *Server) ExecuteStandingCommands(commands [][]byte, interval time.Durati
 
 // 对所有设备下发一条命令
 // @return sm *sync.Map key为c.remoteAddr  value为下发结果：error或者[]byte
-func (s *Server) DownloadOneCommandToAllConn(in []byte) (sm *sync.Map) {
+func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	wg := sync.WaitGroup{}
@@ -490,7 +490,7 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (sm *sync.Map) {
 				select {
 				case <-t.C:
 					t.Stop()
-					sm.Store(c.remoteAddr, ErrDownloadCmdTimeout)
+					response.Store(c.remoteAddr, ErrDownloadCmdTimeout)
 					return
 				default:
 					state, _ := c.getState()
@@ -506,12 +506,12 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (sm *sync.Map) {
 
 					select {
 					case err := <-c.errorCh:
-						sm.Store(c.remoteAddr, err)
+						response.Store(c.remoteAddr, err)
 					case out := <-c.sendCmdRespCh:
-						sm.Store(c.remoteAddr, out)
+						response.Store(c.remoteAddr, out)
 					case <-ticker.C:
 						ticker.Stop()
-						sm.Store(c.remoteAddr, ErrReceiveCmdResponseTimeout)
+						response.Store(c.remoteAddr, ErrReceiveCmdResponseTimeout)
 					}
 
 					return
@@ -524,7 +524,7 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (sm *sync.Map) {
 }
 
 // 针对单个链接下发单个命令
-func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (out []byte, err error) {
+func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (response []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.activeConn {
@@ -546,7 +546,7 @@ func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (out []byte, e
 
 			select {
 			case err = <-c.errorCh:
-			case out = <-c.sendCmdRespCh:
+			case response = <-c.sendCmdRespCh:
 			case <-ticker.C:
 				ticker.Stop()
 				err = ErrReceiveCmdResponseTimeout

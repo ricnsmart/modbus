@@ -28,8 +28,8 @@ func TestServer_Serve(t *testing.T) {
 	cmd2 := make([]byte, 100)
 	commands := make([][]byte, 0)
 	commands = append(commands, cmd1, cmd2)
-	s.ExecuteStandingCommands(commands, 2*time.Minute, func(remoteAddr string, sm *sync.Map) {
-		sm.Range(func(key, value interface{}) bool {
+	s.ExecuteStandingCommands(commands, 2*time.Minute, func(remoteAddr string, response *sync.Map) {
+		response.Range(func(key, value interface{}) bool {
 			// 索引，和commands同步
 			index := key.(int)
 			fmt.Println(index)
@@ -58,9 +58,9 @@ func TestServer_Serve(t *testing.T) {
 	cmd := make([]byte, 100)
 
 	// 批量下发命令
-	sm := s.DownloadOneCommandToAllConn(cmd)
+	resp1 := s.DownloadOneCommandToAllConn(cmd)
 
-	sm.Range(func(key, value interface{}) bool {
+	resp1.Range(func(key, value interface{}) bool {
 		// do something
 		return true
 	})
