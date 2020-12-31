@@ -12,6 +12,8 @@ import (
 )
 
 type (
+	Handler func(remoteAddr string, in []byte) []byte
+
 	Server struct {
 		// Addr optionally specifies the TCP address for the server to listen on,
 		// in the form "host:port".
@@ -19,8 +21,22 @@ type (
 		// See net.Dial for details of the address format.
 		Addr string
 
+		// 处理设备主动上行报文
+		Handler Handler
+
+		// ReadTimeout is the maximum duration for reading the entire
+		// request, including the body.
+		//
+		// Because ReadTimeout does not let Handlers make per-request
+		// decisions on each request body's acceptable deadline or
+		// upload rate, most users will prefer to use
+		// ReadHeaderTimeout. It is valid to use them both.
 		ReadTimeout time.Duration
 
+		// WriteTimeout is the maximum duration before timing out
+		// writes of the response. It is reset whenever a new
+		// request's header is read. Like ReadTimeout, it does not
+		// let Handlers make decisions on a per-request basis.
 		WriteTimeout time.Duration
 
 		// 下行命令超时
@@ -30,20 +46,20 @@ type (
 		MaxBytes int
 
 		// 保存所有活动连接
-		mu sync.Mutex
-
+		mu         sync.Mutex
+		listeners  map[*net.Listener]struct{}
 		activeConn map[*conn]struct{}
-
+		doneChan   chan struct{}
 		inShutdown atomicBool // true when server is in shutdown
+		onShutdown []func()
 
-		// 处理设备上行报文
-		uploadHandler func(remoteAddr string, in []byte) []byte
+		onConnClose []func(remoteAddr string)
 
-		// function to call after Shutdown
-		afterShutdown func()
+		commands [][]byte
 
-		// function to call after connection close
-		afterConnClose func(remoteAddr string)
+		handleCommandsResponse func(remoteAddr string, sm *sync.Map)
+
+		commandsInterval time.Duration // 命令下发间隔
 
 		logger Logger
 	}
@@ -60,30 +76,236 @@ type (
 		// *tls.conn.
 		rwc net.Conn
 
+		curState struct{ atomic uint64 } // packed (unixtime<<8|uint8(ConnState))
+
+		// cancelCtx cancels the connection-level context.
+		cancelCtx context.CancelFunc
+
 		// remoteAddr is rwc.RemoteAddr().String()
 		// 可以用来作为标识链接的唯一值
 		remoteAddr string
-
-		inShutdown atomicBool // true when conn is in shutdown
-
-		inDownloading atomicBool // true when downloading command
 
 		receiveCmdCh chan []byte // 接收命令
 
 		sendCmdRespCh chan []byte // 发送命令响应
 
 		errorCh chan error
-
-		cancel context.CancelFunc
 	}
 )
 
-func (s *Server) SetAfterConnClose(afterConnClose func(remoteAddr string)) {
-	s.afterConnClose = afterConnClose
+func (s *Server) getDoneChan() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getDoneChanLocked()
 }
 
-func (s *Server) SetAfterShutdown(afterShutdown func()) {
-	s.afterShutdown = afterShutdown
+func (s *Server) getDoneChanLocked() chan struct{} {
+	if s.doneChan == nil {
+		s.doneChan = make(chan struct{})
+	}
+	return s.doneChan
+}
+
+func (s *Server) closeDoneChanLocked() {
+	ch := s.getDoneChanLocked()
+	select {
+	case <-ch:
+		// Already closed. Don't close again.
+	default:
+		// Safe to close here. We're the only closer, guarded
+		// by s.mu.
+		close(ch)
+	}
+}
+
+// Close immediately closes all active net.Listeners and any
+// connections in state StateNew, StateActive, or StateIdle. For a
+// graceful shutdown, use Shutdown.
+//
+// Close does not attempt to close (and does not even know about)
+// any hijacked connections, such as WebSockets.
+//
+// Close returns any error returned from closing the Server's
+// underlying Listener(s).
+func (s *Server) Close() error {
+	s.inShutdown.setTrue()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeDoneChanLocked()
+	err := s.closeListenersLocked()
+	for c := range s.activeConn {
+		_ = c.rwc.Close()
+		delete(s.activeConn, c)
+	}
+	return err
+}
+
+// shutdownPollInterval is how often we poll for quiescence
+// during Server.Shutdown. This is lower during tests, to
+// speed up tests.
+// Ideally we could find a solution that doesn't involve polling,
+// but which also doesn't have a high runtime cost (and doesn't
+// involve any contentious mutexes), but that is left as an
+// exercise for the reader.
+var shutdownPollInterval = 500 * time.Millisecond
+
+// Shutdown gracefully shuts down the server without interrupting any
+// active connections. Shutdown works by first closing all open
+// listeners, then closing all idle connections, and then waiting
+// indefinitely for connections to return to idle and then shut down.
+// If the provided context expires before the shutdown is complete,
+// Shutdown returns the context's error, otherwise it returns any
+// error returned from closing the Server's underlying Listener(s).
+//
+// When Shutdown is called, Serve, ListenAndServe, and
+// ListenAndServeTLS immediately return ErrServerClosed. Make sure the
+// program doesn't exit and waits instead for Shutdown to return.
+//
+// Shutdown does not attempt to close nor wait for hijacked
+// connections such as WebSockets. The caller of Shutdown should
+// separately notify such long-lived connections of shutdown and wait
+// for them to close, if desired. See RegisterOnServerShutdown for a way to
+// register shutdown notification functions.
+//
+// Once Shutdown has been called on a server, it may not be reused;
+// future calls to methods such as Serve will return ErrServerClosed.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.inShutdown.setTrue()
+
+	s.mu.Lock()
+	lnerr := s.closeListenersLocked()
+	s.closeDoneChanLocked()
+	for _, f := range s.onShutdown {
+		go f()
+	}
+	s.mu.Unlock()
+
+	ticker := time.NewTicker(shutdownPollInterval)
+	defer ticker.Stop()
+	for {
+		if s.closeIdleConns() && s.numListeners() == 0 {
+			return lnerr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// RegisterOnServerShutdown registers a function to call on Shutdown.
+// This can be used to gracefully shutdown connections
+// This function should start protocol-specific graceful shutdown,
+// but should not wait for shutdown to complete.
+func (s *Server) RegisterOnServerShutdown(f func()) {
+	s.mu.Lock()
+	s.onShutdown = append(s.onShutdown, f)
+	s.mu.Unlock()
+}
+
+func (s *Server) RegisterOnConnClose(f func(remoteAddr string)) {
+	s.onConnClose = append(s.onConnClose, f)
+}
+
+func (s *Server) numListeners() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.listeners)
+}
+
+// closeIdleConns closes all idle connections and reports whether the
+// server is quiescent.
+func (s *Server) closeIdleConns() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	quiescent := true
+	for c := range s.activeConn {
+		st, unixSec := c.getState()
+		// Issue 22682: treat StateNew connections as if
+		// they're idle if we haven't read the first request's
+		// header in over 5 seconds.
+		if st == StateNew && unixSec < time.Now().Unix()-5 {
+			st = StateIdle
+		}
+		if st != StateIdle || unixSec == 0 {
+			// Assume unixSec == 0 means it's a very new
+			// connection, without state set yet.
+			quiescent = false
+			continue
+		}
+		_ = c.rwc.Close()
+		delete(s.activeConn, c)
+	}
+	return quiescent
+}
+
+func (s *Server) closeListenersLocked() error {
+	var err error
+	for ln := range s.listeners {
+		if cerr := (*ln).Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	return err
+}
+
+// A ConnState represents the state of a client connection to a server.
+// It's used by the optional Server.ConnState hook.
+type ConnState int
+
+const (
+	// StateNew represents a new connection that is expected to
+	// send a request immediately. Connections begin at this
+	// state and then transition to either StateActive or
+	// StateClosed.
+	StateNew ConnState = iota
+
+	StateUploading
+
+	StateDownloading
+
+	// StateIdle represents a connection that has finished
+	// handling a request and is in the keep-alive state, waiting
+	// for a new request. Connections transition from StateIdle
+	// to either StateActive or StateClosed.
+	StateIdle
+
+	// StateClosed represents a closed connection.
+	// This is a terminal state.
+	StateClosed
+)
+
+var stateName = map[ConnState]string{
+	StateNew:         "new",
+	StateUploading:   "uploading",
+	StateDownloading: "downloading",
+	StateIdle:        "idle",
+	StateClosed:      "closed",
+}
+
+func (c ConnState) String() string {
+	return stateName[c]
+}
+
+func (c *conn) setState(state ConnState) {
+	srv := c.server
+	switch state {
+	case StateNew:
+		srv.trackConn(c, true)
+	case StateClosed:
+		srv.trackConn(c, false)
+	}
+	if state > 0xff || state < 0 {
+		panic("internal error")
+	}
+	packedState := uint64(time.Now().Unix()<<8) | uint64(state)
+	atomic.StoreUint64(&c.curState.atomic, packedState)
+}
+
+func (c *conn) getState() (state ConnState, unixSec int64) {
+	packedState := atomic.LoadUint64(&c.curState.atomic)
+	return ConnState(packedState & 0xff), int64(packedState >> 8)
 }
 
 type atomicBool int32
@@ -105,8 +327,6 @@ const (
 // and ListenAndServeTLS methods after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("modbus: Server already closed")
 
-var ErrConnectionClosed = errors.New("modbus: Connection already closed")
-
 var ErrPacketTooLarge = errors.New("modbus: packet too large")
 
 var ErrDeviceNotOnline = errors.New("modbus: device not online")
@@ -124,18 +344,7 @@ func NewServer() *Server {
 		ReadTimeout:        defaultReadTimeout,
 		WriteTimeout:       defaultWriteTimeout,
 		DownloadCmdTimeout: defaultDownloadTimeout,
-		activeConn:         make(map[*conn]struct{}, 0),
 	}
-}
-
-func (s *Server) SetUploadHandler(uploadHandler func(remoteAddr string, in []byte) []byte) {
-	s.uploadHandler = uploadHandler
-}
-
-func (s *Server) CountActiveConn() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.activeConn)
 }
 
 func (s *Server) SetLogger(l Logger) {
@@ -162,18 +371,41 @@ func (s *Server) shuttingDown() bool {
 	return s.inShutdown.isSet()
 }
 
-func (s *Server) StartServer(address string) error {
-	l, err := net.Listen("tcp", address)
-	if err != nil {
-		return fmt.Errorf(`modbus: failed to listen port %v , reason: %v`, address, err)
+func (s *Server) Start(addr string, Handler Handler) error {
+	s.Addr = addr
+	s.Handler = Handler
+	return s.ListenAndServe()
+}
+
+func (s *Server) ListenAndServe() error {
+	if s.shuttingDown() {
+		return ErrServerClosed
 	}
+	ln, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+func (s *Server) Serve(l net.Listener) error {
 	defer l.Close()
+
+	if !s.trackListener(&l, true) {
+		return ErrServerClosed
+	}
+	defer s.trackListener(&l, false)
 
 	var tempDelay time.Duration // how long to sleep on accept failure
 
 	for {
 		rwc, err := l.Accept()
 		if err != nil {
+			select {
+			case <-s.getDoneChan():
+				return ErrServerClosed
+			default:
+			}
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
@@ -191,65 +423,36 @@ func (s *Server) StartServer(address string) error {
 		}
 		tempDelay = 0
 		c := s.newConn(rwc)
-		s.trackConn(c, true)
+		c.setState(StateNew) // before Serve can return
 		go c.serve()
 	}
 }
 
-func (s *Server) Shutdown() error {
-	if s.shuttingDown() {
-		return ErrServerClosed
-	}
-	s.debug("modbus: server shutting down")
-	s.inShutdown.setTrue()
+// trackListener adds or removes a net.Listener to the set of tracked
+// listeners.
+//
+// We store a pointer to interface in the map set, in case the
+// net.Listener is not comparable. This is safe because we only call
+// trackListener via Serve and can track+defer untrack the same
+// pointer to local variable there. We never need to compare a
+// Listener from another caller.
+//
+// It reports whether the server is still up (not Shutdown or Closed).
+func (s *Server) trackListener(ln *net.Listener, add bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for c := range s.activeConn {
-		c.inShutdown.setTrue()
-		// 不管连接是否在活动都予以关闭
-		if err := c.rwc.Close(); err != nil {
-			s.error(err)
-		}
+	if s.listeners == nil {
+		s.listeners = make(map[*net.Listener]struct{})
 	}
-	s.afterShutdown()
-	s.debug("modbus: server closed")
-	return nil
-}
-
-func (s *Server) DownloadCommand(remoteAddr string, in []byte) (out []byte, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for c := range s.activeConn {
-		// 如果活动链接中存在对应remoteAddr的链接，说明设备已经上线
-		if c.remoteAddr == remoteAddr {
-			// 每个链接，每次只进行一次下发命令，一次下发命令结束之后，再进行下一次
-			// 判断是否在下发命令当中
-			if c.inDownloading.isSet() {
-				return nil, ErrDownloadCmdTooBusy
-			}
-
-			c.inDownloading.setTrue()
-
-			if err = c.receiveCmd(in); err != nil {
-				c.inDownloading.setFalse()
-				return
-			}
-
-			ticker := time.NewTicker(c.server.DownloadCmdTimeout)
-
-			select {
-			case err = <-c.errorCh:
-			case out = <-c.sendCmdRespCh:
-			case <-ticker.C:
-				ticker.Stop()
-				err = ErrReceiveCmdResponseTimeout
-			}
-
-			c.inDownloading.setFalse()
-			return
+	if add {
+		if s.shuttingDown() {
+			return false
 		}
+		s.listeners[ln] = struct{}{}
+	} else {
+		delete(s.listeners, ln)
 	}
-	return nil, ErrDeviceNotOnline
+	return true
 }
 
 func (s *Server) trackConn(c *conn, add bool) {
@@ -265,20 +468,110 @@ func (s *Server) trackConn(c *conn, add bool) {
 	}
 }
 
+// 执行长期命令
+func (s *Server) ExecuteStandingCommands(commands [][]byte, interval time.Duration, f func(remoteAddr string, sm *sync.Map)) {
+	s.commands = commands
+	s.commandsInterval = interval
+	s.handleCommandsResponse = f
+}
+
+// 对所有设备下发一条命令
+// @return sm *sync.Map key为c.remoteAddr  value为下发结果：error或者[]byte
+func (s *Server) DownloadOneCommandToAllConn(in []byte) (sm *sync.Map) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wg := sync.WaitGroup{}
+	wg.Add(len(s.activeConn))
+	for c := range s.activeConn {
+		go func(c *conn) {
+			defer wg.Done()
+			t := time.NewTicker(c.server.DownloadCmdTimeout)
+			for {
+				select {
+				case <-t.C:
+					t.Stop()
+					sm.Store(c.remoteAddr, ErrDownloadCmdTimeout)
+					return
+				default:
+					state, _ := c.getState()
+					// 如果设备已经在下发命令，则一直等待直到状态改变或者超时
+					if state == StateDownloading {
+						continue
+					}
+					if err := c.receiveCmd(in); err != nil {
+						return
+					}
+
+					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+
+					select {
+					case err := <-c.errorCh:
+						sm.Store(c.remoteAddr, err)
+					case out := <-c.sendCmdRespCh:
+						sm.Store(c.remoteAddr, out)
+					case <-ticker.C:
+						ticker.Stop()
+						sm.Store(c.remoteAddr, ErrReceiveCmdResponseTimeout)
+					}
+
+					return
+				}
+			}
+		}(c)
+	}
+	wg.Wait()
+	return
+}
+
+// 针对单个链接下发单个命令
+func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (out []byte, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.activeConn {
+		// 如果活动链接中存在对应remoteAddr的链接，说明设备已经上线
+		if c.remoteAddr == remoteAddr {
+			state, _ := c.getState()
+			// 每个链接，每次只进行一次下发命令，一次下发命令结束之后，再进行下一次
+			// 如果下发时设备已经在下发命令状态，则中止此次下发
+			// 判断是否在下发命令当中
+			if state == StateDownloading {
+				return nil, ErrDownloadCmdTooBusy
+			}
+
+			if err = c.receiveCmd(in); err != nil {
+				return
+			}
+
+			ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+
+			select {
+			case err = <-c.errorCh:
+			case out = <-c.sendCmdRespCh:
+			case <-ticker.C:
+				ticker.Stop()
+				err = ErrReceiveCmdResponseTimeout
+			}
+
+			return
+		}
+	}
+	return nil, ErrDeviceNotOnline
+}
+
 // 关闭指定链接
 func (s *Server) CloseConn(remoteAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.activeConn {
 		if c.remoteAddr == remoteAddr {
-			if c.shuttingDown() {
-				return ErrConnectionClosed
-			}
-			c.inShutdown.setTrue()
 			c.server.logger.Debug(fmt.Sprintf("modbus: conn: %v closing", c.remoteAddr))
+			packedState := uint64(time.Now().Unix()<<8) | uint64(StateClosed)
+			atomic.StoreUint64(&c.curState.atomic, packedState)
 			// 关闭c.server()
 			delete(s.activeConn, c)
-			go c.server.afterConnClose(c.remoteAddr)
+			for _, f := range c.server.onConnClose {
+				go f(c.remoteAddr)
+			}
 			if err := c.rwc.Close(); err != nil {
 				return err
 			}
@@ -302,21 +595,23 @@ func (s *Server) newConn(rwc net.Conn) *conn {
 
 func (c *conn) serve() {
 	defer func() {
-		if err := c.close(); err != nil {
-			c.server.warn(err)
-		}
 		if err := recover(); err != nil {
 			const size = 64 << 10
 			buf := make([]byte, size)
 			buf = buf[:runtime.Stack(buf, false)]
 			c.server.error(fmt.Sprintf("modbus: panic serving %v: %v\n%s", c.remoteAddr, err, buf))
 		}
+		if state, _ := c.getState(); state != StateClosed {
+			c.close()
+			c.setState(StateClosed)
+		}
 	}()
 
 	readCh := make(chan []byte)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	c.cancel = cancel
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	c.cancelCtx = cancelCtx
+	defer cancelCtx()
 
 	go func(ch chan []byte) {
 		for {
@@ -324,12 +619,61 @@ func (c *conn) serve() {
 			buf, err := c.read()
 			if err != nil {
 				c.server.error(fmt.Sprintf(readFailedFormat, err, c.remoteAddr))
-				c.cancel()
+				c.cancelCtx()
 				return
 			}
 			ch <- buf
 		}
 	}(readCh)
+
+	go func() {
+		if c.server.handleCommandsResponse != nil {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				var sm *sync.Map
+			cmdLoop:
+				for index, cmd := range c.server.commands {
+					state, _ := c.getState()
+					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+				loop:
+					for {
+						select {
+						case <-ticker.C:
+							ticker.Stop()
+							sm.Store(index, ErrDownloadCmdTimeout)
+							continue cmdLoop
+						case <-ctx.Done():
+							return
+						default:
+							if state == StateIdle {
+								break loop
+							}
+						}
+					}
+
+					if err := c.receiveCmd(cmd); err != nil {
+						return
+					}
+
+					select {
+					case err := <-c.errorCh:
+						sm.Store(index, err)
+					case out := <-c.sendCmdRespCh:
+						sm.Store(index, out)
+					case <-ticker.C:
+						ticker.Stop()
+						sm.Store(index, ErrReceiveCmdResponseTimeout)
+					}
+				}
+				c.server.handleCommandsResponse(c.remoteAddr, sm)
+				time.Sleep(c.server.commandsInterval)
+			}
+		}
+	}()
 
 	for {
 		select {
@@ -337,6 +681,7 @@ func (c *conn) serve() {
 			return
 		// 服务器下发命令
 		case cmd := <-c.receiveCmdCh:
+			c.setState(StateDownloading)
 			if err := c.write(cmd); err != nil {
 				c.errorCh <- err
 				c.server.error(fmt.Sprintf(writeFailedFormat, err, c.remoteAddr))
@@ -352,15 +697,27 @@ func (c *conn) serve() {
 				ticker.Stop()
 				c.errorCh <- ErrReceiveCmdResponseTimeout
 			}
-		case data := <-readCh:
+		case out := <-readCh:
 
-			resp := c.server.uploadHandler(c.remoteAddr, data)
+			// If we read any bytes off the wire, we're active.
+			c.setState(StateUploading)
+
+			resp := c.server.Handler(c.remoteAddr, out)
 
 			if err := c.write(resp); err != nil {
 				c.server.error(fmt.Sprintf(writeFailedFormat, err, c.remoteAddr))
 				return
 			}
 		}
+		c.setState(StateIdle)
+	}
+}
+
+// Close the connection.
+func (c *conn) close() {
+	_ = c.rwc.Close()
+	for _, f := range c.server.onConnClose {
+		go f(c.remoteAddr)
 	}
 }
 
@@ -393,25 +750,6 @@ func (c *conn) write(buf []byte) (err error) {
 	_ = c.rwc.SetWriteDeadline(time.Time{})
 	c.server.logger.Debug(fmt.Sprintf("modbus: write conn: %v,msg: 0x% x", c.remoteAddr, buf))
 	return
-}
-
-func (c *conn) close() error {
-	if c.shuttingDown() {
-		return ErrConnectionClosed
-	}
-	c.inShutdown.setTrue()
-	c.server.logger.Debug(fmt.Sprintf("modbus: conn: %v closing", c.remoteAddr))
-	c.server.trackConn(c, false)
-	go c.server.afterConnClose(c.remoteAddr)
-	if err := c.rwc.Close(); err != nil {
-		return err
-	}
-	c.server.logger.Debug(fmt.Sprintf("modbus: conn: %v closed", c.remoteAddr))
-	return nil
-}
-
-func (c *conn) shuttingDown() bool {
-	return c.inShutdown.isSet()
 }
 
 func (c *conn) receiveCmd(in []byte) error {
