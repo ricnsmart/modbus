@@ -468,6 +468,10 @@ func (s *Server) trackConn(c *conn, add bool) {
 	}
 }
 
+// 注册一组命令
+// 这组命令在每个链接上都会执行一次
+// 命令在链接空闲时才会执行
+// 注意：可以注册多组命令
 func (s *Server) RegisterOnceCommands(bs [][]byte, f HandleCommandsResponse) {
 	s.onceCommandsList = append(s.onceCommandsList, &onceCommands{
 		bs:                     bs,
@@ -475,7 +479,10 @@ func (s *Server) RegisterOnceCommands(bs [][]byte, f HandleCommandsResponse) {
 	})
 }
 
-// 每个活动的链接每隔一定时间（interval）执行一组命令（loopCommands）
+// 注册一组循环执行的命令
+// 这组命令在每个链接上每隔一个interval的间隔都会执行一次
+// 命令在链接空闲时才会执行
+// 注意：只需注册一次
 func (s *Server) RegisterLoopCommands(bs [][]byte, interval time.Duration, f HandleCommandsResponse) {
 	s.loopCommands = &loopCommands{
 		bs:                     bs,
