@@ -14,6 +14,11 @@ import (
 type (
 	Handler func(remoteAddr string, in []byte) []byte
 
+	// @param remoteAddr 设备远程地址 ip:port
+	// @param response *sync.Map 此次命令组执行的响应结果
+	// 其中sync.Map的key为命令组的索引值，value为响应结果，其类型为interface{}，有两种情况：error或者 []byte
+	HandleCommandsResponse func(remoteAddr string, response *sync.Map)
+
 	Server struct {
 		// Addr optionally specifies the TCP address for the server to listen on,
 		// in the form "host:port".
@@ -55,41 +60,36 @@ type (
 
 		onConnClose []func(remoteAddr string)
 
-		commands [][]byte
+		// 每个链接都会按指定间隔循环执行的命令组
+		loopCommands *loopCommands
 
-		handleCommandsResponse func(remoteAddr string, response *sync.Map)
-
-		commandsInterval time.Duration // 命令下发间隔
+		// 每个链接都会执行一次的命令组列表
+		// 包含多组命令组
+		onceCommandsList []*onceCommands
 
 		logger Logger
 	}
 
-	// A conn represents the server side of an tcp connection.
-	conn struct {
-		// server is the server on which the connection arrived.
-		// Immutable; never nil.
-		server *Server
+	// 指定间隔循环执行的命令组
+	// 在每个链接状态
+	// It should be called in a loop.
+	loopCommands struct {
+		// 一组命令的字节流
+		bs [][]byte
 
-		// rwc is the underlying network connection.
-		// This is never wrapped by other types and is the value given out
-		// to CloseNotifier callers. It is usually of type *net.TCPConn or
-		// *tls.conn.
-		rwc net.Conn
+		// 命令执行后对响应结果的处理方法
+		handleCommandsResponse HandleCommandsResponse
 
-		curState struct{ atomic uint64 } // packed (unixtime<<8|uint8(ConnState))
+		// 命令下发间隔
+		commandsInterval time.Duration
+	}
 
-		// cancelCtx cancels the connection-level context.
-		cancelCtx context.CancelFunc
+	// 只执行一次的命令组
+	onceCommands struct {
+		// 一组命令的字节流
+		bs [][]byte
 
-		// remoteAddr is rwc.RemoteAddr().String()
-		// 可以用来作为标识链接的唯一值
-		remoteAddr string
-
-		receiveCmdCh chan []byte // 接收命令
-
-		sendCmdRespCh chan []byte // 发送命令响应
-
-		errorCh chan error
+		handleCommandsResponse HandleCommandsResponse
 	}
 )
 
@@ -468,14 +468,23 @@ func (s *Server) trackConn(c *conn, add bool) {
 	}
 }
 
-// 执行长期命令
-func (s *Server) ExecuteStandingCommands(commands [][]byte, interval time.Duration, f func(remoteAddr string, response *sync.Map)) {
-	s.commands = commands
-	s.commandsInterval = interval
-	s.handleCommandsResponse = f
+func (s *Server) RegisterOnceCommands(bs [][]byte, f HandleCommandsResponse) {
+	s.onceCommandsList = append(s.onceCommandsList, &onceCommands{
+		bs:                     bs,
+		handleCommandsResponse: f,
+	})
 }
 
-// 对所有设备下发一条命令
+// 每个活动的链接每隔一定时间（interval）执行一组命令（loopCommands）
+func (s *Server) RegisterLoopCommands(bs [][]byte, interval time.Duration, f HandleCommandsResponse) {
+	s.loopCommands = &loopCommands{
+		bs:                     bs,
+		handleCommandsResponse: f,
+		commandsInterval:       interval,
+	}
+}
+
+// 一次性对所有活动链接下发一条命令
 // @return sm *sync.Map key为c.remoteAddr  value为下发结果：error或者[]byte
 func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
 	s.mu.Lock()
@@ -523,7 +532,7 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
 	return
 }
 
-// 针对单个链接下发单个命令
+// 一次性针对单个链接下发单个命令
 func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (response []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -593,6 +602,34 @@ func (s *Server) newConn(rwc net.Conn) *conn {
 	}
 }
 
+// A conn represents the server side of an tcp connection.
+type conn struct {
+	// server is the server on which the connection arrived.
+	// Immutable; never nil.
+	server *Server
+
+	// rwc is the underlying network connection.
+	// This is never wrapped by other types and is the value given out
+	// to CloseNotifier callers. It is usually of type *net.TCPConn or
+	// *tls.conn.
+	rwc net.Conn
+
+	curState struct{ atomic uint64 } // packed (unixtime<<8|uint8(ConnState))
+
+	// cancelCtx cancels the connection-level context.
+	cancelCtx context.CancelFunc
+
+	// remoteAddr is rwc.RemoteAddr().String()
+	// 可以用来作为标识链接的唯一值
+	remoteAddr string
+
+	receiveCmdCh chan []byte // 接收命令
+
+	sendCmdRespCh chan []byte // 发送命令响应
+
+	errorCh chan error
+}
+
 func (c *conn) serve() {
 	defer func() {
 		if err := recover(); err != nil {
@@ -627,16 +664,17 @@ func (c *conn) serve() {
 	}(readCh)
 
 	go func() {
-		if c.server.handleCommandsResponse != nil {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
+		if len(c.server.onceCommandsList) != 0 {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			for _, oc := range c.server.onceCommandsList {
 				var sm *sync.Map
 			cmdLoop:
-				for index, cmd := range c.server.commands {
+				for index, cmd := range oc.bs {
 					state, _ := c.getState()
 					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
 				loop:
@@ -649,6 +687,7 @@ func (c *conn) serve() {
 						case <-ctx.Done():
 							return
 						default:
+							// 当设备处于空闲时才开始执行loopCommands
 							if state == StateIdle {
 								break loop
 							}
@@ -669,8 +708,57 @@ func (c *conn) serve() {
 						sm.Store(index, ErrReceiveCmdResponseTimeout)
 					}
 				}
-				c.server.handleCommandsResponse(c.remoteAddr, sm)
-				time.Sleep(c.server.commandsInterval)
+				oc.handleCommandsResponse(c.remoteAddr, sm)
+			}
+		}
+	}()
+
+	go func() {
+		if c.server.loopCommands != nil {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				var sm *sync.Map
+			cmdLoop:
+				for index, cmd := range c.server.loopCommands.bs {
+					state, _ := c.getState()
+					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+				loop:
+					for {
+						select {
+						case <-ticker.C:
+							ticker.Stop()
+							sm.Store(index, ErrDownloadCmdTimeout)
+							continue cmdLoop
+						case <-ctx.Done():
+							return
+						default:
+							// 当设备处于空闲时才开始执行loopCommands
+							if state == StateIdle {
+								break loop
+							}
+						}
+					}
+
+					if err := c.receiveCmd(cmd); err != nil {
+						return
+					}
+
+					select {
+					case err := <-c.errorCh:
+						sm.Store(index, err)
+					case out := <-c.sendCmdRespCh:
+						sm.Store(index, out)
+					case <-ticker.C:
+						ticker.Stop()
+						sm.Store(index, ErrReceiveCmdResponseTimeout)
+					}
+				}
+				c.server.loopCommands.handleCommandsResponse(c.remoteAddr, sm)
+				time.Sleep(c.server.loopCommands.commandsInterval)
 			}
 		}
 	}()

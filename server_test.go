@@ -28,7 +28,7 @@ func TestServer_Serve(t *testing.T) {
 	cmd2 := make([]byte, 100)
 	commands := make([][]byte, 0)
 	commands = append(commands, cmd1, cmd2)
-	s.ExecuteStandingCommands(commands, 2*time.Minute, func(remoteAddr string, response *sync.Map) {
+	s.RegisterLoopCommands(commands, 2*time.Minute, func(remoteAddr string, response *sync.Map) {
 		response.Range(func(key, value interface{}) bool {
 			// 索引，和commands同步
 			index := key.(int)
@@ -44,6 +44,28 @@ func TestServer_Serve(t *testing.T) {
 			return true
 		})
 
+	})
+
+	cmd3 := make([]byte, 100)
+	cmd4 := make([]byte, 100)
+	commands2 := make([][]byte, 0)
+	commands2 = append(commands2, cmd3, cmd4)
+	s.RegisterOnceCommands(commands2, func(remoteAddr string, response *sync.Map) {
+		response.Range(func(key, value interface{}) bool {
+			// do something
+			return true
+		})
+	})
+
+	cmd5 := make([]byte, 100)
+	cmd6 := make([]byte, 100)
+	commands3 := make([][]byte, 0)
+	commands3 = append(commands3, cmd5, cmd6)
+	s.RegisterOnceCommands(commands3, func(remoteAddr string, response *sync.Map) {
+		response.Range(func(key, value interface{}) bool {
+			// do something
+			return true
+		})
 	})
 
 	go func() {
