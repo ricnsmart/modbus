@@ -1,3 +1,3 @@
-module e.coding.net/ricnsmart/second-party/modbus
+module e.coding.net/ricnsmart/iot/modbus
 
 go 1.15
