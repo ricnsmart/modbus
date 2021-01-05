@@ -14,6 +14,10 @@ import (
 type (
 	Handler func(remoteAddr string, in []byte) []byte
 
+	// @param remoteAddr string
+	// @return [][]byte 需要下发的命令组
+	BuildCommands func(remoteAddr string) [][]byte
+
 	// @param remoteAddr 设备远程地址 ip:port
 	// @param response *sync.Map 此次命令组执行的响应结果
 	// 其中sync.Map的key为命令组的索引值，value为响应结果，其类型为interface{}，有两种情况：error或者 []byte
@@ -74,8 +78,7 @@ type (
 	// 在每个链接状态
 	// It should be called in a loop.
 	loopCommands struct {
-		// 一组命令的字节流
-		bs [][]byte
+		buildCommands BuildCommands
 
 		// 命令执行后对响应结果的处理方法
 		handleCommandsResponse HandleCommandsResponse
@@ -86,8 +89,7 @@ type (
 
 	// 只执行一次的命令组
 	onceCommands struct {
-		// 一组命令的字节流
-		bs [][]byte
+		buildCommands BuildCommands
 
 		handleCommandsResponse HandleCommandsResponse
 	}
@@ -472,9 +474,9 @@ func (s *Server) trackConn(c *conn, add bool) {
 // 这组命令在每个链接上都会执行一次
 // 命令在链接空闲时才会执行
 // 注意：可以注册多组命令
-func (s *Server) RegisterOnceCommands(bs [][]byte, f HandleCommandsResponse) {
+func (s *Server) RegisterOnceCommands(b BuildCommands, f HandleCommandsResponse) {
 	s.onceCommandsList = append(s.onceCommandsList, &onceCommands{
-		bs:                     bs,
+		buildCommands:          b,
 		handleCommandsResponse: f,
 	})
 }
@@ -483,9 +485,9 @@ func (s *Server) RegisterOnceCommands(bs [][]byte, f HandleCommandsResponse) {
 // 这组命令在每个链接上每隔一个interval的间隔都会执行一次
 // 命令在链接空闲时才会执行
 // 注意：只需注册一次
-func (s *Server) RegisterLoopCommands(bs [][]byte, interval time.Duration, f HandleCommandsResponse) {
+func (s *Server) RegisterLoopCommands(b BuildCommands, interval time.Duration, f HandleCommandsResponse) {
 	s.loopCommands = &loopCommands{
-		bs:                     bs,
+		buildCommands:          b,
 		handleCommandsResponse: f,
 		commandsInterval:       interval,
 	}
@@ -681,7 +683,7 @@ func (c *conn) serve() {
 			for _, oc := range c.server.onceCommandsList {
 				var sm *sync.Map
 			cmdLoop:
-				for index, cmd := range oc.bs {
+				for index, cmd := range oc.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
 					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
 				loop:
@@ -730,7 +732,7 @@ func (c *conn) serve() {
 				}
 				var sm *sync.Map
 			cmdLoop:
-				for index, cmd := range c.server.loopCommands.bs {
+				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
 					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
 				loop:
