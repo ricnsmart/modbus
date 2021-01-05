@@ -21,7 +21,7 @@ type (
 	// @param remoteAddr 设备远程地址 ip:port
 	// @param response *sync.Map 此次命令组执行的响应结果
 	// 其中sync.Map的key为命令组的索引值，value为响应结果，其类型为interface{}，有两种情况：error或者 []byte
-	HandleCommandsResponse func(remoteAddr string, response *sync.Map)
+	HandleCommandsResponse func(remoteAddr string, response map[int]interface{})
 
 	Server struct {
 		// Addr optionally specifies the TCP address for the server to listen on,
@@ -681,7 +681,7 @@ func (c *conn) serve() {
 			}
 
 			for _, oc := range c.server.onceCommandsList {
-				var sm *sync.Map
+				resp := make(map[int]interface{})
 			cmdLoop:
 				for index, cmd := range oc.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
@@ -691,7 +691,7 @@ func (c *conn) serve() {
 						select {
 						case <-ticker.C:
 							ticker.Stop()
-							sm.Store(index, ErrDownloadCmdTimeout)
+							resp[index] = ErrDownloadCmdTimeout
 							continue cmdLoop
 						case <-ctx.Done():
 							return
@@ -709,15 +709,15 @@ func (c *conn) serve() {
 
 					select {
 					case err := <-c.errorCh:
-						sm.Store(index, err)
+						resp[index] = err
 					case out := <-c.sendCmdRespCh:
-						sm.Store(index, out)
+						resp[index] = out
 					case <-ticker.C:
 						ticker.Stop()
-						sm.Store(index, ErrReceiveCmdResponseTimeout)
+						resp[index] = ErrReceiveCmdResponseTimeout
 					}
 				}
-				oc.handleCommandsResponse(c.remoteAddr, sm)
+				oc.handleCommandsResponse(c.remoteAddr, resp)
 			}
 		}
 	}()
@@ -730,7 +730,7 @@ func (c *conn) serve() {
 					return
 				default:
 				}
-				var sm *sync.Map
+				resp := make(map[int]interface{})
 			cmdLoop:
 				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
@@ -740,7 +740,7 @@ func (c *conn) serve() {
 						select {
 						case <-ticker.C:
 							ticker.Stop()
-							sm.Store(index, ErrDownloadCmdTimeout)
+							resp[index] = ErrDownloadCmdTimeout
 							continue cmdLoop
 						case <-ctx.Done():
 							return
@@ -758,15 +758,15 @@ func (c *conn) serve() {
 
 					select {
 					case err := <-c.errorCh:
-						sm.Store(index, err)
+						resp[index] = err
 					case out := <-c.sendCmdRespCh:
-						sm.Store(index, out)
+						resp[index] = out
 					case <-ticker.C:
 						ticker.Stop()
-						sm.Store(index, ErrReceiveCmdResponseTimeout)
+						resp[index] = ErrReceiveCmdResponseTimeout
 					}
 				}
-				c.server.loopCommands.handleCommandsResponse(c.remoteAddr, sm)
+				c.server.loopCommands.handleCommandsResponse(c.remoteAddr, resp)
 				time.Sleep(c.server.loopCommands.commandsInterval)
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -28,13 +27,13 @@ func TestServer_Serve(t *testing.T) {
 	cmd2 := make([]byte, 100)
 	commands := make([][]byte, 0)
 	commands = append(commands, cmd1, cmd2)
+	// 只能调用一次
 	s.RegisterLoopCommands(func(remoteAddr string) [][]byte {
 		// do something
 		return commands
-	}, 2*time.Minute, func(remoteAddr string, response *sync.Map) {
-		response.Range(func(key, value interface{}) bool {
+	}, 2*time.Minute, func(remoteAddr string, response map[int]interface{}) {
+		for index, value := range response {
 			// 索引，和commands同步
-			index := key.(int)
 			fmt.Println(index)
 			switch value.(type) {
 			case error:
@@ -44,8 +43,7 @@ func TestServer_Serve(t *testing.T) {
 			default:
 				panic("未知的响应类型")
 			}
-			return true
-		})
+		}
 
 	})
 
@@ -53,14 +51,23 @@ func TestServer_Serve(t *testing.T) {
 	cmd4 := make([]byte, 100)
 	commands2 := make([][]byte, 0)
 	commands2 = append(commands2, cmd3, cmd4)
+	// 可以注册多次，从而注册多组命令分别执行
 	s.RegisterOnceCommands(func(remoteAddr string) [][]byte {
 		// do something
 		return commands2
-	}, func(remoteAddr string, response *sync.Map) {
-		response.Range(func(key, value interface{}) bool {
-			// do something
-			return true
-		})
+	}, func(remoteAddr string, response map[int]interface{}) {
+		for index, value := range response {
+			// 索引，和commands同步
+			fmt.Println(index)
+			switch value.(type) {
+			case error:
+				// 业务代码
+			case []byte:
+				// 业务代码
+			default:
+				panic("未知的响应类型")
+			}
+		}
 	})
 
 	cmd5 := make([]byte, 100)
@@ -70,11 +77,19 @@ func TestServer_Serve(t *testing.T) {
 	s.RegisterOnceCommands(func(remoteAddr string) [][]byte {
 		// do something
 		return commands3
-	}, func(remoteAddr string, response *sync.Map) {
-		response.Range(func(key, value interface{}) bool {
-			// do something
-			return true
-		})
+	}, func(remoteAddr string, response map[int]interface{}) {
+		for index, value := range response {
+			// 索引，和commands同步
+			fmt.Println(index)
+			switch value.(type) {
+			case error:
+				// 业务代码
+			case []byte:
+				// 业务代码
+			default:
+				panic("未知的响应类型")
+			}
+		}
 	})
 
 	go func() {
