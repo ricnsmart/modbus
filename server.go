@@ -801,9 +801,12 @@ func (c *conn) serve() {
 
 			resp := c.server.Handler(c.remoteAddr, out)
 
-			if err := c.write(resp); err != nil {
-				c.server.error(fmt.Sprintf(writeFailedFormat, err, c.remoteAddr))
-				return
+			// 部分情况下，上报不需要回应
+			if resp != nil {
+				if err := c.write(resp); err != nil {
+					c.server.error(fmt.Sprintf(writeFailedFormat, err, c.remoteAddr))
+					return
+				}
 			}
 		}
 		c.setState(StateIdle)
