@@ -40,11 +40,18 @@ type ReadableRegister interface {
 	Readable
 }
 
+// 生成读取单个寄存器的报文
+func NewReadPacket(address uint8, r ReadableRegister) []byte {
+	f := &RTUFrame{Address: address, Function: Read}
+	SetDataWithRegisterAndNumber(f, r.GetStart(), r.GetNum())
+	return f.Bytes()
+}
+
 // 必须是相邻的寄存器，中间可以出现预留空白寄存器
 type ReadableRegisters []ReadableRegister
 
 // 将可读寄存器转换为读取寄存器标准modbus报文
-func (rs ReadableRegisters) ReadBytes(address uint8) []byte {
+func (rs ReadableRegisters) NewReadPacket(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rs.GetStart(), rs.GetNum())
 	return f.Bytes()
@@ -288,7 +295,7 @@ func (ws WritableRegisters) GetNum() uint16 {
 }
 
 // 将可写寄存器转换为写入寄存器标准modbus报文
-func (ws WritableRegisters) WriteBytes(address uint8, params map[string]interface{}) ([]byte, error) {
+func (ws WritableRegisters) NewWritePacket(address uint8, params map[string]interface{}) ([]byte, error) {
 	f := &RTUFrame{Address: address, Function: Write}
 	buf, err := ws.Encode(params)
 	if err != nil {
@@ -302,6 +309,16 @@ type ReadableAndWritableRegister interface {
 	Register
 	Readable
 	Writable
+}
+
+func NewWritePacket(address uint8, w WritableRegister, params map[string]interface{}) ([]byte, error) {
+	f := &RTUFrame{Address: address, Function: Write}
+	dst := make([]byte, w.GetNum()*2)
+	if err := w.Encode(params, dst); err != nil {
+		return nil, err
+	}
+	SetDataWithRegisterAndNumberAndBytes(f, w.GetStart(), w.GetNum(), dst)
+	return f.Bytes(), nil
 }
 
 // 必须是相邻的寄存器，中间可以出现预留空白寄存器
@@ -318,13 +335,13 @@ func (rws ReadableAndWritableRegisters) GetNum() uint16 {
 }
 
 // 必须是连续的寄存器才能读取
-func (rws ReadableAndWritableRegisters) ReadBytes(address uint8) []byte {
+func (rws ReadableAndWritableRegisters) NewReadPacket(address uint8) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, rws.GetStart(), rws.GetNum())
 	return f.Bytes()
 }
 
-func (rws ReadableAndWritableRegisters) WriteBytes(address uint8, params map[string]interface{}) ([]byte, error) {
+func (rws ReadableAndWritableRegisters) NewWritePacket(address uint8, params map[string]interface{}) ([]byte, error) {
 	f := &RTUFrame{Address: address, Function: Write}
 	buf, err := rws.Encode(params)
 	if err != nil {
