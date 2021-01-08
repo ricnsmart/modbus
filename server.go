@@ -648,9 +648,12 @@ func (c *conn) serve() {
 			c.server.error(fmt.Sprintf("modbus: panic serving %v: %v\n%s", c.remoteAddr, err, buf))
 		}
 		if state, _ := c.getState(); state != StateClosed {
-			c.close()
+			if err := c.close(); err != nil {
+				c.server.error(fmt.Sprintf("modbus: close conn failed: %v", err))
+			}
 			c.setState(StateClosed)
 		}
+		c.server.debug("modbus: connection main runtime closed")
 	}()
 
 	readCh := make(chan []byte)
@@ -660,6 +663,9 @@ func (c *conn) serve() {
 	defer cancelCtx()
 
 	go func(ch chan []byte) {
+		defer func() {
+			c.server.debug("modbus: read runtime closed")
+		}()
 		for {
 			// 设备主动上报
 			buf, err := c.read()
@@ -673,6 +679,15 @@ func (c *conn) serve() {
 	}(readCh)
 
 	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				const size = 64 << 10
+				buf := make([]byte, size)
+				buf = buf[:runtime.Stack(buf, false)]
+				c.server.error(fmt.Sprintf("modbus: once commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+			}
+			c.server.debug("modbus: once commands runtime closed")
+		}()
 		if len(c.server.onceCommandsList) != 0 {
 			select {
 			case <-ctx.Done():
@@ -723,6 +738,15 @@ func (c *conn) serve() {
 	}()
 
 	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				const size = 64 << 10
+				buf := make([]byte, size)
+				buf = buf[:runtime.Stack(buf, false)]
+				c.server.error(fmt.Sprintf("modbus: loop commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+			}
+			c.server.debug("modbus: loop commands runtime closed")
+		}()
 		if c.server.loopCommands != nil {
 			for {
 				select {
@@ -814,11 +838,11 @@ func (c *conn) serve() {
 }
 
 // Close the connection.
-func (c *conn) close() {
-	_ = c.rwc.Close()
+func (c *conn) close() error {
 	for _, f := range c.server.onConnClose {
 		go f(c.remoteAddr)
 	}
+	return c.rwc.Close()
 }
 
 func (c *conn) read() ([]byte, error) {
