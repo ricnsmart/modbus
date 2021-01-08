@@ -678,17 +678,18 @@ func (c *conn) serve() {
 		}
 	}(readCh)
 
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				const size = 64 << 10
-				buf := make([]byte, size)
-				buf = buf[:runtime.Stack(buf, false)]
-				c.server.error(fmt.Sprintf("modbus: once commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
-			}
-			c.server.debug("modbus: once commands runtime closed")
-		}()
-		if len(c.server.onceCommandsList) != 0 {
+	if len(c.server.onceCommandsList) != 0 {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					buf = buf[:runtime.Stack(buf, false)]
+					c.server.error(fmt.Sprintf("modbus: once commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+				}
+				c.server.debug("modbus: once commands runtime closed")
+			}()
+
 			select {
 			case <-ctx.Done():
 				return
@@ -734,20 +735,21 @@ func (c *conn) serve() {
 				}
 				oc.handleCommandsResponse(c.remoteAddr, resp)
 			}
-		}
-	}()
-
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				const size = 64 << 10
-				buf := make([]byte, size)
-				buf = buf[:runtime.Stack(buf, false)]
-				c.server.error(fmt.Sprintf("modbus: loop commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
-			}
-			c.server.debug("modbus: loop commands runtime closed")
 		}()
-		if c.server.loopCommands != nil {
+	}
+
+	if c.server.loopCommands != nil {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					buf = buf[:runtime.Stack(buf, false)]
+					c.server.error(fmt.Sprintf("modbus: loop commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+				}
+				c.server.debug("modbus: loop commands runtime closed")
+			}()
+
 			for {
 				select {
 				case <-ctx.Done():
@@ -793,8 +795,8 @@ func (c *conn) serve() {
 				c.server.loopCommands.handleCommandsResponse(c.remoteAddr, resp)
 				time.Sleep(c.server.loopCommands.commandsInterval)
 			}
-		}
-	}()
+		}()
+	}
 
 	for {
 		select {
