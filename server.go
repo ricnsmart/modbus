@@ -48,8 +48,11 @@ type (
 		// let Handlers make decisions on a per-request basis.
 		WriteTimeout time.Duration
 
-		// 下行命令超时
+		// 下发命令超时
 		DownloadCmdTimeout time.Duration
+
+		// 注册命令超时设置
+		RegisteredCmdTimeout time.Duration
 
 		// 一次性读取字节流的最大长度
 		MaxBytes int
@@ -94,6 +97,10 @@ type (
 		handleCommandsResponse HandleCommandsResponse
 	}
 )
+
+func NewCustomServer(readTimeout time.Duration, writeTimeout time.Duration, downloadCmdTimeout time.Duration, maxBytes int, logger Logger) *Server {
+	return &Server{ReadTimeout: readTimeout, WriteTimeout: writeTimeout, DownloadCmdTimeout: downloadCmdTimeout, MaxBytes: maxBytes, logger: logger}
+}
 
 func (s *Server) getDoneChan() <-chan struct{} {
 	s.mu.Lock()
@@ -317,12 +324,13 @@ func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
 func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
 
 const (
-	defaultMaxBytes        = 500
-	defaultDownloadTimeout = 20 * time.Second
-	defaultWriteTimeout    = 1 * time.Minute
-	defaultReadTimeout     = 4 * time.Minute
-	readFailedFormat       = "read failed: %v,conn: %v"
-	writeFailedFormat      = "write failed: %v,conn: %v"
+	defaultMaxBytes             = 500
+	defaultDownloadTimeout      = 20 * time.Second
+	defaultWriteTimeout         = 1 * time.Minute
+	defaultReadTimeout          = 4 * time.Minute
+	defaultRegisteredCmdTimeout = 2 * time.Minute
+	readFailedFormat            = "read failed: %v,conn: %v"
+	writeFailedFormat           = "write failed: %v,conn: %v"
 )
 
 // ErrServerClosed is returned by the Server's Serve, ServeTLS, ListenAndServe,
@@ -341,12 +349,33 @@ var ErrReceiveCmdResponseTimeout = errors.New("modbus: receive command response 
 
 func NewServer() *Server {
 	return &Server{
-		logger:             NewDefaultLogger(),
-		MaxBytes:           defaultMaxBytes,
-		ReadTimeout:        defaultReadTimeout,
-		WriteTimeout:       defaultWriteTimeout,
-		DownloadCmdTimeout: defaultDownloadTimeout,
+		logger:               NewDefaultLogger(),
+		MaxBytes:             defaultMaxBytes,
+		ReadTimeout:          defaultReadTimeout,
+		WriteTimeout:         defaultWriteTimeout,
+		DownloadCmdTimeout:   defaultDownloadTimeout,
+		RegisteredCmdTimeout: defaultRegisteredCmdTimeout,
 	}
+}
+
+func (s *Server) SetMaxBytes(max int) {
+	s.MaxBytes = max
+}
+
+func (s *Server) SetReadTimeout(t time.Duration) {
+	s.ReadTimeout = t
+}
+
+func (s *Server) SetWriteTimeout(t time.Duration) {
+	s.WriteTimeout = t
+}
+
+func (s *Server) SetDownloadCmdTimeout(t time.Duration) {
+	s.DownloadCmdTimeout = t
+}
+
+func (s *Server) SetRegisteredCmdTimeout(t time.Duration) {
+	s.RegisteredCmdTimeout = t
 }
 
 func (s *Server) SetLogger(l Logger) {
@@ -695,7 +724,7 @@ func (c *conn) serve() {
 			cmdLoop:
 				for index, cmd := range oc.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
-					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
 						select {
@@ -749,7 +778,7 @@ func (c *conn) serve() {
 			cmdLoop:
 				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
 					state, _ := c.getState()
-					ticker := time.NewTicker(c.server.DownloadCmdTimeout)
+					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
 						select {
