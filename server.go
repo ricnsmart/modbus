@@ -690,12 +690,6 @@ func (c *conn) serve() {
 				c.server.debug("modbus: once commands runtime closed")
 			}()
 
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
 			for _, oc := range c.server.onceCommandsList {
 				resp := make(map[int]interface{})
 			cmdLoop:
@@ -751,11 +745,6 @@ func (c *conn) serve() {
 			}()
 
 			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
 				resp := make(map[int]interface{})
 			cmdLoop:
 				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
