@@ -88,6 +88,10 @@ type Float32RoRegister struct {
 	Get   func(value float32) interface{}
 }
 
+func (f *Float32RoRegister) GetName() string {
+	return f.Name
+}
+
 func (f *Float32RoRegister) GetStart() uint16 {
 	return f.Start
 }
