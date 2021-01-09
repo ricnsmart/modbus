@@ -529,10 +529,12 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
 	defer s.mu.Unlock()
 	wg := sync.WaitGroup{}
 	wg.Add(len(s.activeConn))
+
 	for c := range s.activeConn {
 		go func(c *conn) {
 			defer wg.Done()
-			t := time.NewTicker(c.server.DownloadCmdTimeout)
+			// 这里的时间不能太短
+			t := time.NewTicker(c.server.RegisteredCmdTimeout)
 			for {
 				select {
 				case <-t.C:
@@ -540,12 +542,16 @@ func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
 					response.Store(c.remoteAddr, ErrDownloadCmdTimeout)
 					return
 				default:
+					// 因为遍历的是activeConn，而conn的连接状态设置又是被s.mu锁住的
+					// 所以这里state不太可能是StateClosed
 					state, _ := c.getState()
 					// 如果设备已经在下发命令，则一直等待直到状态改变或者超时
-					if state == StateDownloading {
+					if state != StateIdle {
 						continue
 					}
+
 					if err := c.receiveCmd(in); err != nil {
+						response.Store(c.remoteAddr, err)
 						return
 					}
 
@@ -577,6 +583,8 @@ func (s *Server) DownloadOneCommand(remoteAddr string, in []byte) (response []by
 	for c := range s.activeConn {
 		// 如果活动链接中存在对应remoteAddr的链接，说明设备已经上线
 		if c.remoteAddr == remoteAddr {
+			// 因为遍历的是activeConn，而conn的连接状态设置又是被s.mu锁住的
+			// 所以这里state不太可能是StateClosed
 			state, _ := c.getState()
 			// 每个链接，每次只进行一次下发命令，一次下发命令结束之后，再进行下一次
 			// 如果下发时设备已经在下发命令状态，则中止此次下发
@@ -829,7 +837,7 @@ func (c *conn) serve() {
 				// 如果写入失败，则断开链接
 				return
 			}
-
+			// 这里的超时必须比conn read time out短，否则可能读上来一个主动上报的包，而不是写入的响应
 			ticker := time.NewTicker(c.server.DownloadCmdTimeout)
 			select {
 			case data := <-readCh:
