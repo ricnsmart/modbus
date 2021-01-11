@@ -731,7 +731,6 @@ func (c *conn) serve() {
 				resp := make(map[int]interface{})
 			cmdLoop:
 				for index, cmd := range oc.buildCommands(c.remoteAddr) {
-					state, _ := c.getState()
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
@@ -744,6 +743,7 @@ func (c *conn) serve() {
 						case <-ctx.Done():
 							return
 						default:
+							state, _ := c.getState()
 							// 当设备处于空闲时才开始执行loopCommands
 							if state == StateIdle {
 								break loop
@@ -788,7 +788,6 @@ func (c *conn) serve() {
 				resp := make(map[int]interface{})
 			cmdLoop:
 				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
-					state, _ := c.getState()
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
@@ -801,6 +800,7 @@ func (c *conn) serve() {
 						case <-ctx.Done():
 							return
 						default:
+							state, _ := c.getState()
 							// 当设备处于空闲时才开始执行loopCommands
 							if state == StateIdle {
 								break loop
