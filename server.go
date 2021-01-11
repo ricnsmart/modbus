@@ -739,6 +739,7 @@ func (c *conn) serve() {
 						case <-ticker.C:
 							ticker.Stop()
 							resp[index] = ErrDownloadCmdTimeout
+							c.server.debug(ErrDownloadCmdTimeout.Error())
 							continue cmdLoop
 						case <-ctx.Done():
 							return
@@ -751,12 +752,14 @@ func (c *conn) serve() {
 					}
 
 					if err := c.receiveCmd(cmd); err != nil {
+						c.server.debug(err)
 						return
 					}
 
 					select {
 					case err := <-c.errorCh:
 						resp[index] = err
+						c.server.debug(err)
 					case out := <-c.sendCmdRespCh:
 						resp[index] = out
 					case <-ticker.C:
@@ -793,6 +796,7 @@ func (c *conn) serve() {
 						case <-ticker.C:
 							ticker.Stop()
 							resp[index] = ErrDownloadCmdTimeout
+							c.server.debug(ErrDownloadCmdTimeout.Error())
 							continue cmdLoop
 						case <-ctx.Done():
 							return
@@ -805,12 +809,14 @@ func (c *conn) serve() {
 					}
 
 					if err := c.receiveCmd(cmd); err != nil {
+						c.server.debug(err)
 						return
 					}
 
 					select {
 					case err := <-c.errorCh:
 						resp[index] = err
+						c.server.debug(err)
 					case out := <-c.sendCmdRespCh:
 						resp[index] = out
 					case <-ticker.C:
