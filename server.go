@@ -15,8 +15,9 @@ type (
 	Handler func(remoteAddr string, in []byte) []byte
 
 	// @param remoteAddr string
+	// @param closeChan 连接关闭信号
 	// @return [][]byte 需要下发的命令组
-	BuildCommands func(remoteAddr string) [][]byte
+	BuildCommands func(remoteAddr string, closeChan <-chan struct{}) [][]byte
 
 	// @param remoteAddr 设备远程地址 ip:port
 	// @param response *sync.Map 此次命令组执行的响应结果
@@ -704,7 +705,7 @@ func (c *conn) serve() {
 			c.server.debug("modbus: read runtime closed")
 		}()
 		for {
-			// 设备主动上报
+			// 此处会阻塞，直到有新的数据包到达
 			buf, err := c.read()
 			if err != nil {
 				c.server.error(fmt.Sprintf(readFailedFormat, err, c.remoteAddr))
@@ -730,7 +731,7 @@ func (c *conn) serve() {
 			for _, oc := range c.server.onceCommandsList {
 				resp := make(map[int]interface{})
 			cmdLoop:
-				for index, cmd := range oc.buildCommands(c.remoteAddr) {
+				for index, cmd := range oc.buildCommands(c.remoteAddr, ctx.Done()) {
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
@@ -787,7 +788,7 @@ func (c *conn) serve() {
 			for {
 				resp := make(map[int]interface{})
 			cmdLoop:
-				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr) {
+				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr, ctx.Done()) {
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loop:
 					for {
@@ -906,6 +907,8 @@ func (c *conn) write(buf []byte) (err error) {
 		return err
 	}
 	_ = c.rwc.SetWriteDeadline(time.Time{})
+	// 控制写入频率
+	time.Sleep(1 * time.Second)
 	c.server.logger.Debug(fmt.Sprintf("modbus: write conn: %v,msg: 0x% x", c.remoteAddr, buf))
 	return
 }
