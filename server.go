@@ -906,10 +906,10 @@ func (c *conn) write(buf []byte) (err error) {
 	if err != nil {
 		return err
 	}
+	c.server.logger.Debug(fmt.Sprintf("modbus: write conn: %v,msg: 0x% x", c.remoteAddr, buf))
 	_ = c.rwc.SetWriteDeadline(time.Time{})
 	// 控制写入频率
 	time.Sleep(1 * time.Second)
-	c.server.logger.Debug(fmt.Sprintf("modbus: write conn: %v,msg: 0x% x", c.remoteAddr, buf))
 	return
 }
 
