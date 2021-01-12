@@ -504,6 +504,7 @@ func (s *Server) trackConn(c *conn, add bool) {
 // 这组命令在每个链接上都会执行一次
 // 命令在链接空闲时才会执行
 // 注意：可以注册多组命令
+// 默认先执行一次性的命令，然后再执行循环执行的命令
 func (s *Server) RegisterOnceCommands(b BuildCommands, f HandleCommandsResponse) {
 	s.onceCommandsList = append(s.onceCommandsList, &onceCommands{
 		buildCommands:          b,
@@ -515,6 +516,7 @@ func (s *Server) RegisterOnceCommands(b BuildCommands, f HandleCommandsResponse)
 // 这组命令在每个链接上每隔一个interval的间隔都会执行一次
 // 命令在链接空闲时才会执行
 // 注意：只需注册一次
+// // 默认先执行一次性的命令，然后再执行循环执行的命令
 func (s *Server) RegisterLoopCommands(b BuildCommands, interval time.Duration, f HandleCommandsResponse) {
 	s.loopCommands = &loopCommands{
 		buildCommands:          b,
@@ -716,95 +718,81 @@ func (c *conn) serve() {
 		}
 	}(readCh)
 
-	if len(c.server.onceCommandsList) != 0 {
-		go func() {
-			defer func() {
-				if err := recover(); err != nil {
-					const size = 64 << 10
-					buf := make([]byte, size)
-					buf = buf[:runtime.Stack(buf, false)]
-					c.server.error(fmt.Sprintf("modbus: once commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
-				}
-				c.server.debug("modbus: once commands runtime closed")
-			}()
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				const size = 64 << 10
+				buf := make([]byte, size)
+				buf = buf[:runtime.Stack(buf, false)]
+				c.server.error(fmt.Sprintf("modbus: once commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+			}
+			c.server.debug("modbus: once commands runtime closed")
+		}()
 
-			for _, oc := range c.server.onceCommandsList {
-				resp := make(map[int]interface{})
-			cmdLoop:
-				for index, cmd := range oc.buildCommands(c.remoteAddr, ctx.Done()) {
-					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
-				loop:
-					for {
-						select {
-						case <-ticker.C:
-							ticker.Stop()
-							resp[index] = ErrDownloadCmdTimeout
-							c.server.debug(ErrDownloadCmdTimeout.Error())
-							continue cmdLoop
-						case <-ctx.Done():
-							return
-						default:
-							state, _ := c.getState()
-							// 当设备处于空闲时才开始执行loopCommands
-							if state == StateIdle {
-								break loop
-							}
-						}
-					}
-
-					if err := c.receiveCmd(cmd); err != nil {
-						c.server.debug(err)
-						return
-					}
-
+		for _, oc := range c.server.onceCommandsList {
+			resp := make(map[int]interface{})
+		onceCMDLoop:
+			for index, cmd := range oc.buildCommands(c.remoteAddr, ctx.Done()) {
+				ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
+			onceWaitLoop:
+				for {
 					select {
-					case err := <-c.errorCh:
-						resp[index] = err
-						c.server.debug(err)
-					case out := <-c.sendCmdRespCh:
-						resp[index] = out
 					case <-ticker.C:
 						ticker.Stop()
-						resp[index] = ErrReceiveCmdResponseTimeout
+						resp[index] = ErrDownloadCmdTimeout
+						c.server.debug(ErrDownloadCmdTimeout.Error())
+						continue onceCMDLoop
+					case <-ctx.Done():
+						return
+					default:
+						// 当设备处于空闲时才开始执行loopCommands
+						if state, _ := c.getState(); state == StateIdle {
+							c.setState(StateDownloading)
+							break onceWaitLoop
+						}
 					}
 				}
-				oc.handleCommandsResponse(c.remoteAddr, resp)
-			}
-		}()
-	}
 
-	if c.server.loopCommands != nil {
-		go func() {
-			defer func() {
-				if err := recover(); err != nil {
-					const size = 64 << 10
-					buf := make([]byte, size)
-					buf = buf[:runtime.Stack(buf, false)]
-					c.server.error(fmt.Sprintf("modbus: loop commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+				if err := c.receiveCmd(cmd); err != nil {
+					c.server.debug(err)
+					return
 				}
-				c.server.debug("modbus: loop commands runtime closed")
-			}()
 
+				select {
+				case err := <-c.errorCh:
+					resp[index] = err
+					c.server.debug(err)
+				case out := <-c.sendCmdRespCh:
+					resp[index] = out
+				case <-ticker.C:
+					ticker.Stop()
+					resp[index] = ErrReceiveCmdResponseTimeout
+				}
+			}
+			oc.handleCommandsResponse(c.remoteAddr, resp)
+		}
+
+		if c.server.loopCommands != nil {
 			for {
 				resp := make(map[int]interface{})
-			cmdLoop:
+			loopCmdLoop:
 				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr, ctx.Done()) {
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
-				loop:
+				loopWait:
 					for {
 						select {
 						case <-ticker.C:
 							ticker.Stop()
 							resp[index] = ErrDownloadCmdTimeout
 							c.server.debug(ErrDownloadCmdTimeout.Error())
-							continue cmdLoop
+							continue loopCmdLoop
 						case <-ctx.Done():
 							return
 						default:
-							state, _ := c.getState()
 							// 当设备处于空闲时才开始执行loopCommands
-							if state == StateIdle {
-								break loop
+							if state, _ := c.getState(); state == StateIdle {
+								c.setState(StateDownloading)
+								break loopWait
 							}
 						}
 					}
@@ -828,6 +816,21 @@ func (c *conn) serve() {
 				c.server.loopCommands.handleCommandsResponse(c.remoteAddr, resp)
 				time.Sleep(c.server.loopCommands.commandsInterval)
 			}
+		}
+
+	}()
+
+	if c.server.loopCommands != nil {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					buf = buf[:runtime.Stack(buf, false)]
+					c.server.error(fmt.Sprintf("modbus: loop commands runtime panic serving %v: %v\n%s", c.remoteAddr, err, buf))
+				}
+				c.server.debug("modbus: loop commands runtime closed")
+			}()
 		}()
 	}
 
@@ -837,7 +840,6 @@ func (c *conn) serve() {
 			return
 		// 服务器下发命令
 		case cmd := <-c.receiveCmdCh:
-			c.setState(StateDownloading)
 			if err := c.write(cmd); err != nil {
 				c.errorCh <- err
 				c.server.error(fmt.Sprintf(writeFailedFormat, err, c.remoteAddr))
