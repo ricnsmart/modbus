@@ -500,6 +500,12 @@ func (s *Server) trackConn(c *conn, add bool) {
 	}
 }
 
+func (s *Server) CountConn() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeConn)
+}
+
 // 注册一组命令
 // 这组命令在每个链接上都会执行一次
 // 命令在链接空闲时才会执行
