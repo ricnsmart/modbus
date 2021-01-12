@@ -737,8 +737,9 @@ func (c *conn) serve() {
 
 		for _, oc := range c.server.onceCommandsList {
 			resp := make(map[int]interface{})
+			onceCmds := oc.buildCommands(c.remoteAddr, ctx.Done())
 		onceCMDLoop:
-			for index, cmd := range oc.buildCommands(c.remoteAddr, ctx.Done()) {
+			for index, cmd := range onceCmds {
 				ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 			onceWaitLoop:
 				for {
@@ -779,10 +780,11 @@ func (c *conn) serve() {
 		}
 
 		if c.server.loopCommands != nil {
+			cmds := c.server.loopCommands.buildCommands(c.remoteAddr, ctx.Done())
 			for {
 				resp := make(map[int]interface{})
 			loopCmdLoop:
-				for index, cmd := range c.server.loopCommands.buildCommands(c.remoteAddr, ctx.Done()) {
+				for index, cmd := range cmds {
 					ticker := time.NewTicker(c.server.RegisteredCmdTimeout)
 				loopWait:
 					for {
