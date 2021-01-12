@@ -2,6 +2,7 @@ package modbus
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -45,6 +46,23 @@ func NewReadPacket(address uint8, r ReadableRegister) []byte {
 	f := &RTUFrame{Address: address, Function: Read}
 	SetDataWithRegisterAndNumber(f, r.GetStart(), r.GetNum())
 	return f.Bytes()
+}
+
+func NewReadResponse(r ReadableRegister, b []byte) (f *RTUFrame, err error) {
+	f, err = NewRTUFrame(b)
+	if err != nil {
+		return nil, err
+	}
+	if exception := GetException(f); exception != Success {
+		return nil, errors.New(exception.String())
+	}
+
+	// 第一位是字节数
+	byteNum := f.Data[0]
+	if expectNum := r.GetNum() * 2; uint16(byteNum) != expectNum {
+		return nil, fmt.Errorf("寄存器字节数异常，期望：%v，实际：%v", expectNum, byteNum)
+	}
+	return
 }
 
 // 必须是相邻的寄存器，中间可以出现预留空白寄存器
@@ -272,6 +290,35 @@ type WritableRegister interface {
 	Writable
 }
 
+func NewWritePacket(address uint8, w WritableRegister, params map[string]interface{}) ([]byte, error) {
+	f := &RTUFrame{Address: address, Function: Write}
+	dst := make([]byte, w.GetNum()*2)
+	if err := w.Encode(params, dst); err != nil {
+		return nil, err
+	}
+	SetDataWithRegisterAndNumberAndBytes(f, w.GetStart(), w.GetNum(), dst)
+	return f.Bytes(), nil
+}
+
+func NewWriteResponse(w WritableRegister, b []byte) (f *RTUFrame, err error) {
+	f, err = NewRTUFrame(b)
+	if err != nil {
+		return nil, err
+	}
+	if exception := GetException(f); exception != Success {
+		return nil, errors.New(exception.String())
+	}
+	if expectStart := binary.BigEndian.Uint16(f.Data[0:2]); w.GetStart() != expectStart {
+		return nil, fmt.Errorf("寄存器起始地址不匹配，期望：%v，实际：%v", w.GetStart(), expectStart)
+	}
+	_ = f.Data[3]
+
+	if num := binary.BigEndian.Uint16(f.Data[2:4]); num != w.GetNum() {
+		return nil, fmt.Errorf("寄存器寄存器数量异常，期望：%v，实际：%v", w.GetNum(), num)
+	}
+	return
+}
+
 // 必须是相邻的寄存器，中间可以出现预留空白寄存器
 type WritableRegisters []WritableRegister
 
@@ -313,16 +360,6 @@ type ReadableAndWritableRegister interface {
 	Register
 	Readable
 	Writable
-}
-
-func NewWritePacket(address uint8, w WritableRegister, params map[string]interface{}) ([]byte, error) {
-	f := &RTUFrame{Address: address, Function: Write}
-	dst := make([]byte, w.GetNum()*2)
-	if err := w.Encode(params, dst); err != nil {
-		return nil, err
-	}
-	SetDataWithRegisterAndNumberAndBytes(f, w.GetStart(), w.GetNum(), dst)
-	return f.Bytes(), nil
 }
 
 // 必须是相邻的寄存器，中间可以出现预留空白寄存器
