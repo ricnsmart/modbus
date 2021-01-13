@@ -1,3 +1,3 @@
-module e.coding.net/ricnsmart/iot/modbus
+module github.com/ricnsmart/modbus
 
 go 1.15
