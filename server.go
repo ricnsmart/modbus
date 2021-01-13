@@ -20,7 +20,7 @@ type (
 	BuildCommands func(remoteAddr string, closeChan <-chan struct{}) [][]byte
 
 	// @param remoteAddr 设备远程地址 ip:port
-	// @param response *sync.Map 此次命令组执行的响应结果
+	// @param response map[int]interface{} 此次命令组执行的响应结果
 	// 其中sync.Map的key为命令组的索引值，value为响应结果，其类型为interface{}，有两种情况：error或者 []byte
 	HandleCommandsResponse func(remoteAddr string, response map[int]interface{})
 
@@ -532,8 +532,8 @@ func (s *Server) RegisterLoopCommands(b BuildCommands, interval time.Duration, f
 }
 
 // 一次性对所有活动链接下发一条命令
-// @return sm *sync.Map key为c.remoteAddr  value为下发结果：error或者[]byte
-func (s *Server) DownloadOneCommandToAllConn(in []byte) (response *sync.Map) {
+// @return response sync.Map key为c.remoteAddr  value为下发结果：error或者[]byte
+func (s *Server) DownloadOneCommandToAllConn(in []byte) (response sync.Map) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	wg := sync.WaitGroup{}
