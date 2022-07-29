@@ -17,7 +17,7 @@ func TestCRCModbus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotCrc := CRCModbus(tt.args.data); gotCrc != tt.wantCrc {
+			if gotCrc := crcModbus(tt.args.data); gotCrc != tt.wantCrc {
 				t.Errorf("got %v, want %v", gotCrc, tt.wantCrc)
 			}
 		})

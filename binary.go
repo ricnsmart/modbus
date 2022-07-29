@@ -3,8 +3,26 @@ package modbus
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 )
+
+type ByteOrder interface {
+	BytesToUint16(bytes []byte) []uint16
+	Uint16ToBytes(values []uint16) []byte
+	BytesToUint32(bytes []byte) []uint32
+	Uint32ToBytes(values []uint32) []byte
+	BytesToFloat32(bytes []byte) float32
+	Float32ToBytes(value float32) []byte
+	EncodeUint16(bytes *[]byte, value uint16)
+	EncodeUint32(bytes *[]byte, value uint32)
+	EncodeFloat32(bytes *[]byte, value float32)
+	DecodeUint16s(bytes *[]byte, num uint) (vals []uint16, err error)
+	DecodeUint32s(bytes *[]byte, num uint) (vals []uint32, err error)
+	DecodeFloat32s(bytes *[]byte, num uint) (vals []float32, err error)
+	Uint16ToBits(bs []byte) (r []byte)
+	BitsToUint16(src []byte, dst []byte)
+}
 
 type (
 	bigEndian    struct{}
@@ -57,14 +75,14 @@ func (bigEndian) Uint32ToBytes(values []uint32) []byte {
 	return bytes
 }
 
-// BytesToFloat32 converts a big endian array of bytes to an float32
+// BytesToFloat32 converts a big endian array of bytes to a float32
 func (bigEndian) BytesToFloat32(bytes []byte) float32 {
 	bits := binary.BigEndian.Uint32(bytes)
 
 	return math.Float32frombits(bits)
 }
 
-// Float32ToBytes converts an float32 to a big endian array of bytes
+// Float32ToBytes converts a float32 to a big endian array of bytes
 func (bigEndian) Float32ToBytes(value float32) []byte {
 	bits := math.Float32bits(value)
 
@@ -73,7 +91,7 @@ func (bigEndian) Float32ToBytes(value float32) []byte {
 	return bytes
 }
 
-// Float32ToBytes converts an array of float32 to a big endian array of bytes
+// Float32sToBytes converts an array of float32 to a big endian array of bytes
 func (bigEndian) Float32sToBytes(values []float32) []byte {
 	buf := make([]byte, 0)
 	for _, value := range values {
@@ -86,7 +104,7 @@ func (bigEndian) Float32sToBytes(values []float32) []byte {
 	return buf
 }
 
-// 将一个uint16类型的数字转换为大端的字节充入一个数组的尾部
+// EncodeUint16 将一个uint16类型的数字转换为大端的字节充入一个数组的尾部
 // 数组前面的内容可以不必是uint16类型
 func (bigEndian) EncodeUint16(bytes *[]byte, value uint16) {
 	bArr := make([]byte, 2)
@@ -94,20 +112,20 @@ func (bigEndian) EncodeUint16(bytes *[]byte, value uint16) {
 	*bytes = append(*bytes, bArr...)
 }
 
-// 将一个uint32类型的数字转换为大端的字节充入一个数组的尾部
+// EncodeUint32 将一个uint32类型的数字转换为大端的字节充入一个数组的尾部
 func (bigEndian) EncodeUint32(bytes *[]byte, value uint32) {
 	bArr := make([]byte, 4)
 	binary.BigEndian.PutUint32(bArr[0:4], value)
 	*bytes = append(*bytes, bArr...)
 }
 
-// 将一个float32类型的数字转换为大端的字节充入一个数组的尾部
+// EncodeFloat32 将一个float32类型的数字转换为大端的字节充入一个数组的尾部
 func (bigEndian) EncodeFloat32(bytes *[]byte, value float32) {
 	bArr := BigEndian.Float32ToBytes(value)
 	*bytes = append(*bytes, bArr...)
 }
 
-// 读取字节数组中，指定长度的uint16类型数字，返回一个uint16的数组
+// DecodeUint16s 读取字节数组中，指定长度的uint16类型数字，返回一个uint16的数组
 // 适用于混乱类型的字节流
 func (bigEndian) DecodeUint16s(bytes *[]byte, num uint) (vals []uint16, err error) {
 	needLen := (int)(2 * num)
@@ -122,7 +140,7 @@ func (bigEndian) DecodeUint16s(bytes *[]byte, num uint) (vals []uint16, err erro
 	return
 }
 
-// 读取字节数组中，指定长度的uint32类型数字，返回一个uint32的数组
+// DecodeUint32s 读取字节数组中，指定长度的uint32类型数字，返回一个uint32的数组
 // 适用于混乱类型的字节流
 func (bigEndian) DecodeUint32s(bytes *[]byte, num uint) (vals []uint32, err error) {
 	needLen := (int)(4 * num)
@@ -137,7 +155,7 @@ func (bigEndian) DecodeUint32s(bytes *[]byte, num uint) (vals []uint32, err erro
 	return
 }
 
-// 读取字节数组中，指定长度的float32类型数字，返回一个float32的数组
+// DecodeFloat32s 读取字节数组中，指定长度的float32类型数字，返回一个float32的数组
 // 适用于混乱类型的字节流
 func (bigEndian) DecodeFloat32s(bytes *[]byte, num uint) (vals []float32, err error) {
 	needLen := (int)(4 * num)
@@ -197,14 +215,14 @@ func (littleEndian) Uint32ToBytes(values []uint32) []byte {
 	return bytes
 }
 
-// BytesToFloat32 converts a little endian array of bytes to an float32
+// BytesToFloat32 converts a little endian array of bytes to a float32
 func (littleEndian) BytesToFloat32(bytes []byte) float32 {
 	bits := binary.LittleEndian.Uint32(bytes)
 
 	return math.Float32frombits(bits)
 }
 
-// Float32ToBytes converts an float32 to a little endian array of bytes
+// Float32ToBytes converts a float32 to a little endian array of bytes
 func (littleEndian) Float32ToBytes(value float32) []byte {
 	bits := math.Float32bits(value)
 
@@ -213,7 +231,7 @@ func (littleEndian) Float32ToBytes(value float32) []byte {
 	return bytes
 }
 
-// Float32ToBytes converts an array of float32 to a little endian array of bytes
+// Float32sToBytes converts an array of float32 to a little endian array of bytes
 func (littleEndian) Float32sToBytes(values []float32) []byte {
 	buf := make([]byte, 0)
 	for _, value := range values {
@@ -285,4 +303,58 @@ func (littleEndian) DecodeFloat32s(bytes *[]byte, num uint) (vals []float32, err
 	*bytes = (*bytes)[needLen:]
 
 	return fp32vals, nil
+}
+
+// BitsToByte 比特转字节
+// buf 需要是大端模式排列比特位
+func BitsToByte(buf []byte) (u byte) {
+	for i := 0; i < len(buf); i++ {
+		bit := buf[i]
+		if bit != 0 && bit != 1 {
+			panic(fmt.Sprintf("bit must 0 or 1,actual: %v", bit))
+		}
+		u += bit << (i)
+	}
+	return
+}
+
+// ByteToBits 字节转比特
+// 大端模式排列比特位
+func ByteToBits(d byte) []byte {
+	b := make([]byte, 8)
+	for i := 0; d > 0; d /= 2 {
+		b[i] = d % 2
+		i++
+	}
+	return b
+}
+
+// Uint16ToBits uint16转比特
+// 大端模式排列比特位
+func (bigEndian) Uint16ToBits(bs []byte) (r []byte) {
+	_ = bs[1]
+	r = append(ByteToBits(bs[1]), ByteToBits(bs[0])...)
+	return
+}
+
+// Uint16ToBits uint16转比特
+// 大端模式排列比特位
+func (littleEndian) Uint16ToBits(bs []byte) (r []byte) {
+	_ = bs[1]
+	r = append(ByteToBits(bs[0]), ByteToBits(bs[1])...)
+	return
+}
+
+// BitsToUint16 比特转uint16
+func (bigEndian) BitsToUint16(src []byte, dst []byte) {
+	_ = src[15]
+	dst[0] = BitsToByte(src[8:16])
+	dst[1] = BitsToByte(src[0:8])
+}
+
+// BitsToUint16 比特转uint16
+func (littleEndian) BitsToUint16(src []byte, dst []byte) {
+	_ = src[15]
+	dst[0] = BitsToByte(src[0:8])
+	dst[1] = BitsToByte(src[8:16])
 }
