@@ -9,41 +9,50 @@ import (
 	"time"
 )
 
-type Handler func(south []byte, writer func([]byte) error, addr net.Addr)
+type Handler func(data []byte, writer func([]byte) error, addr net.Addr)
 
 type Server struct {
 	addr string
 
 	handle Handler
 
-	ReadTimeout time.Duration
+	readTimeout time.Duration
 
-	WriteTimeout time.Duration
+	writeTimeout time.Duration
 
 	sm sync.Map
 
 	handleRemoteAddr func(addr net.Addr)
+
+	maxReadSize int
 }
 
 var DefaultReadTimeout = 60 * time.Second
 
 var DefaultWriteTimeout = 60 * time.Second
 
+var DefaultMaxReadSize = 512
+
 func NewServer(addr string, handle Handler) *Server {
 	return &Server{
 		addr:         addr,
 		handle:       handle,
-		ReadTimeout:  DefaultReadTimeout,
-		WriteTimeout: DefaultWriteTimeout,
+		readTimeout:  DefaultReadTimeout,
+		writeTimeout: DefaultWriteTimeout,
+		maxReadSize:  DefaultMaxReadSize,
 	}
 }
 
 func (s *Server) SetReadTimeout(t time.Duration) {
-	s.ReadTimeout = t
+	s.readTimeout = t
 }
 
 func (s *Server) SetWriteTimeout(t time.Duration) {
-	s.WriteTimeout = t
+	s.writeTimeout = t
+}
+
+func (s *Server) SetMaxReadSize(size int) {
+	s.maxReadSize = size
 }
 
 func (s *Server) ListenAndServe() error {
@@ -116,9 +125,9 @@ func (c *conn) serve() {
 
 	go func() {
 		for {
-			_ = c.rwc.SetReadDeadline(time.Now().Add(c.server.ReadTimeout))
+			_ = c.rwc.SetReadDeadline(time.Now().Add(c.server.readTimeout))
 
-			buf := make([]byte, 512)
+			buf := make([]byte, c.server.maxReadSize)
 
 			l, err := c.rwc.Read(buf)
 			if err != nil {
@@ -150,7 +159,7 @@ func (c *conn) serve() {
 }
 
 func (c *conn) write(buf []byte) error {
-	_ = c.rwc.SetWriteDeadline(time.Now().Add(c.server.WriteTimeout))
+	_ = c.rwc.SetWriteDeadline(time.Now().Add(c.server.writeTimeout))
 
 	defer c.rwc.SetReadDeadline(time.Time{})
 
