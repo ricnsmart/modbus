@@ -38,17 +38,6 @@ func SetDataWithRegisterAndNumber(frame Framer, register uint16, number uint16) 
 	frame.SetData(data)
 }
 
-// SetDataWithRegisterAndNumberAndValues 仅用于写寄存器，并且要求寄存器值类型为uint16
-// SetDataWithRegisterAndNumberAndValues sets the TCPFrame Data byte field to hold a register and number of registers and values
-func SetDataWithRegisterAndNumberAndValues(frame Framer, register uint16, number uint16, values []uint16) {
-	data := make([]byte, 5+len(values)*2)
-	binary.BigEndian.PutUint16(data[0:2], register)
-	binary.BigEndian.PutUint16(data[2:4], number)
-	data[4] = uint8(len(values) * 2)
-	copy(data[5:], BigEndian.Uint16ToBytes(values))
-	frame.SetData(data)
-}
-
 // SetDataWithRegisterAndNumberAndBytes 仅用于写寄存器
 // SetDataWithRegisterAndNumberAndBytes sets the TCPFrame Data byte field to hold a register and number of registers and coil bytes
 func SetDataWithRegisterAndNumberAndBytes(frame Framer, register uint16, number uint16, bytes []byte) {

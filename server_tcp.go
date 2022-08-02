@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type Handler func(data []byte, writer func([]byte) error, addr net.Addr)
+type Handler func(data []byte, addr net.Addr, answer func(payload []byte) error)
 
 type Server struct {
 	addr string
@@ -20,11 +20,14 @@ type Server struct {
 
 	writeTimeout time.Duration
 
-	sm sync.Map
+	// 按照remoteAddr存储下发数据通道
+	downChMap sync.Map
 
-	handleRemoteAddr func(addr net.Addr)
+	// 按照remoteAddr存储下发响应数据通道
+	respChMap sync.Map
 
-	maxReadSize int
+	// 设备上报数据，server一次读取多少个字节
+	readSize int
 }
 
 var DefaultReadTimeout = 60 * time.Second
@@ -39,7 +42,7 @@ func NewServer(addr string, handle Handler) *Server {
 		handle:       handle,
 		readTimeout:  DefaultReadTimeout,
 		writeTimeout: DefaultWriteTimeout,
-		maxReadSize:  DefaultMaxReadSize,
+		readSize:     DefaultMaxReadSize,
 	}
 }
 
@@ -52,7 +55,7 @@ func (s *Server) SetWriteTimeout(t time.Duration) {
 }
 
 func (s *Server) SetMaxReadSize(size int) {
-	s.maxReadSize = size
+	s.readSize = size
 }
 
 func (s *Server) ListenAndServe() error {
@@ -71,7 +74,7 @@ func (s *Server) ListenAndServe() error {
 
 		c := s.newConn(rwc)
 
-		s.sm.Store(rwc.RemoteAddr(), c.north)
+		s.downChMap.Store(rwc.RemoteAddr(), c.downCh)
 
 		go c.serve()
 	}
@@ -81,26 +84,36 @@ func (s *Server) newConn(rwc net.Conn) *conn {
 	return &conn{
 		server: s,
 		rwc:    rwc,
-		north:  make(chan []byte),
+		downCh: make(chan []byte),
 	}
 }
 
-func (s *Server) DownloadCMD(ctx context.Context, addr net.Addr, cmd []byte) error {
-	c, ok := s.sm.Load(addr)
+func (s *Server) DownloadCommand(ctx context.Context, addr net.Addr, cmd []byte) ([]byte, error) {
+	c, ok := s.downChMap.Load(addr)
 	if !ok {
-		return errors.New("connection not found")
+		return nil, errors.New("connection not found")
 	}
 
-	north := c.(chan []byte)
+	respCh := make(chan []byte)
+
+	s.respChMap.Store(addr, respCh)
+	defer s.respChMap.Delete(addr)
+
+	downCh := c.(chan []byte)
 
 	select {
 	case <-ctx.Done():
-		return errors.New("download timeout")
-	case north <- cmd:
+		return nil, errors.New("download timeout")
+	case downCh <- cmd:
 
 	}
 
-	return nil
+	select {
+	case <-ctx.Done():
+		return nil, errors.New("response timeout")
+	case resp := <-respCh:
+		return resp, nil
+	}
 }
 
 type conn struct {
@@ -114,20 +127,29 @@ type conn struct {
 	// *tls.conn.
 	rwc net.Conn
 
-	north chan []byte
+	// downCh 用户向设备下发的数据
+	downCh chan []byte
+
+	// respCh 用于存放下发后设备的响应
+	respCh chan []byte
 }
 
 func (c *conn) serve() {
 
-	south := make(chan []byte)
+	// upCh 设备上发的数据
+	upCh := make(chan []byte)
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// 设备离线，清除下发通道
+	// 同时这也是判断设备是否在线的依据
+	defer c.server.downChMap.Delete(c.rwc.RemoteAddr())
 
 	go func() {
 		for {
 			_ = c.rwc.SetReadDeadline(time.Now().Add(c.server.readTimeout))
 
-			buf := make([]byte, c.server.maxReadSize)
+			buf := make([]byte, c.server.readSize)
 
 			l, err := c.rwc.Read(buf)
 			if err != nil {
@@ -138,7 +160,7 @@ func (c *conn) serve() {
 
 			buf = buf[:l]
 
-			south <- buf
+			upCh <- buf
 			_ = c.rwc.SetReadDeadline(time.Time{})
 		}
 	}()
@@ -146,13 +168,37 @@ func (c *conn) serve() {
 	for {
 		select {
 		case <-ctx.Done():
-			c.server.sm.Delete(c.rwc.RemoteAddr())
+			c.server.downChMap.Delete(c.rwc.RemoteAddr())
 			return
-		case s := <-south:
-			go c.server.handle(s, c.write, c.rwc.RemoteAddr())
-		case n := <-c.north:
-			if err := c.write(n); err != nil {
+		case packet := <-upCh:
+			go c.server.handle(packet, c.rwc.RemoteAddr(), func(payload []byte) error {
+				if err := c.write(payload); err != nil {
+					cancel()
+					return err
+				}
+				return nil
+			})
+		case payload := <-c.downCh:
+			if err := c.write(payload); err != nil {
+				cancel()
 				return
+			}
+
+			respCh, ok := c.server.respChMap.Load(c.rwc.RemoteAddr())
+			if !ok {
+				log.Printf("查找响应通道失败，remote address:%v", c.rwc.RemoteAddr().String())
+				continue
+			}
+
+			// 超时时间，最长不应超过读取超时时
+			// 否则读取到的就可能不是下发命令后设备的响应
+			ticker := time.NewTicker(c.server.readTimeout)
+
+			select {
+			case <-ticker.C:
+
+			case resp := <-upCh:
+				respCh.(chan []byte) <- resp
 			}
 		}
 	}
