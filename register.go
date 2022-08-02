@@ -136,20 +136,22 @@ func NewWriteRTUFrame[T WritableRegister](address uint8, w T, params map[string]
 }
 
 func FindStartAndNum[T Register](rs []T) (start, num uint16) {
-	start = rs[0].Start()
-	var end = rs[0].Start()
+	first := rs[0]
+	var end = rs[0]
 
 	for i := 0; i < len(rs)-1; i++ {
-		if start > rs[i+1].Start() {
-			start = rs[i+1].Start()
+		if first.Start() > rs[i+1].Start() {
+			first = rs[i+1]
 		}
 
-		if end < rs[i+1].Start() {
-			end = rs[i+1].Start()
+		if end.Start() < rs[i+1].Start() {
+			end = rs[i+1]
 		}
 	}
 
-	num = end - start + 1
+	start = first.Start()
+
+	num = end.Start() - start + 1 + end.Num()
 
 	return
 }
