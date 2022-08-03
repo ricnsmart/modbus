@@ -64,6 +64,10 @@ func (s *Server) SetMaxReadSize(size int) {
 	s.readSize = size
 }
 
+func (s *Server) SetOnConnClose(f func(addr net.Addr)) {
+	s.onConnClose = f
+}
+
 func (s *Server) ListenAndServe() error {
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
