@@ -18,7 +18,7 @@ type Readable interface {
 }
 
 type Writable interface {
-	Encode(params map[string]any) ([]byte, error)
+	Encode(params map[string]any, dst []byte) error
 }
 
 type ReadableRegister interface {
@@ -71,20 +71,6 @@ type WritableRegister interface {
 	Writable
 }
 
-func EncodeRegisters[T WritableRegister](ws []T, params map[string]any, body []byte) error {
-	start, _ := FindStartAndNum(ws)
-	for _, r := range ws {
-		start := (r.Start() - start) * 2
-		end := start + r.Num()*2
-		buf, err := r.Encode(params)
-		if err != nil {
-			return err
-		}
-		copy(body[start:end], buf)
-	}
-	return nil
-}
-
 type ReadWriteRegister interface {
 	Register
 	Readable
@@ -112,11 +98,9 @@ func NewWriteRTUFrameWithRegisters[T WritableRegister](address uint8, rs []T, pa
 	for _, r := range rs {
 		start := (r.Start() - start) * 2
 		end := start + r.Num()*2
-		buf, err := r.Encode(params)
-		if err != nil {
+		if err := r.Encode(params, body[start:end]); err != nil {
 			return nil, err
 		}
-		copy(body[start:end], buf)
 	}
 	f := &RTUFrame{Address: address, Function: 0x10}
 
@@ -127,8 +111,8 @@ func NewWriteRTUFrameWithRegisters[T WritableRegister](address uint8, rs []T, pa
 // NewWriteRTUFrame 单个寄存器生成写入RTUFrame
 func NewWriteRTUFrame[T WritableRegister](address uint8, w T, params map[string]any) (*RTUFrame, error) {
 	f := &RTUFrame{Address: address, Function: 0x10}
-	body, err := w.Encode(params)
-	if err != nil {
+	body := make([]byte, w.Num()*2)
+	if err := w.Encode(params, body); err != nil {
 		return nil, err
 	}
 	SetDataWithRegisterAndNumberAndBytes(f, w.Start(), w.Num(), body)

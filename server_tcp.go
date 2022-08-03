@@ -20,6 +20,9 @@ type Server struct {
 
 	writeTimeout time.Duration
 
+	// 存储连接
+	connMap sync.Map
+
 	// 按照remoteAddr存储下发数据通道
 	downChMap sync.Map
 
@@ -76,6 +79,8 @@ func (s *Server) ListenAndServe() error {
 
 		s.downChMap.Store(rwc.RemoteAddr(), c.downCh)
 
+		s.connMap.Store(rwc.RemoteAddr(), rwc)
+
 		go c.serve()
 	}
 }
@@ -86,6 +91,16 @@ func (s *Server) newConn(rwc net.Conn) *conn {
 		rwc:    rwc,
 		downCh: make(chan []byte),
 	}
+}
+
+func (s *Server) CloseConn(addr any) error {
+	v, ok := s.connMap.Load(addr)
+	if !ok {
+		return errors.New("connection not found")
+	}
+	rwc := v.(net.Conn)
+	defer s.connMap.Delete(addr)
+	return rwc.Close()
 }
 
 func (s *Server) DownloadCommand(ctx context.Context, addr net.Addr, cmd []byte) ([]byte, error) {
@@ -143,7 +158,10 @@ func (c *conn) serve() {
 
 	// 设备离线，清除下发通道
 	// 同时这也是判断设备是否在线的依据
-	defer c.server.downChMap.Delete(c.rwc.RemoteAddr())
+	defer func() {
+		c.server.downChMap.Delete(c.rwc.RemoteAddr())
+		c.server.connMap.Delete(c.rwc)
+	}()
 
 	go func() {
 		for {
