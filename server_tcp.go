@@ -82,7 +82,7 @@ func (s *Server) ListenAndServe() error {
 			return err
 		}
 
-		go s.newConn(rwc)
+		go s.newConn(rwc).serve()
 	}
 }
 
