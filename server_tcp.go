@@ -3,7 +3,6 @@ package modbus
 import (
 	"context"
 	"errors"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -21,16 +20,20 @@ type Server struct {
 	writeTimeout time.Duration
 
 	// 存储连接
+	// 用于主动关闭连接
 	connMap sync.Map
 
 	// 按照remoteAddr存储下发数据通道
 	downChMap sync.Map
 
 	// 按照remoteAddr存储下发响应数据通道
+	// 其中的通道需要用时创建、用完删除
 	respChMap sync.Map
 
 	// 设备上报数据，server一次读取多少个字节
 	readSize int
+
+	onConnClose func(addr net.Addr)
 }
 
 var DefaultReadTimeout = 60 * time.Second
@@ -75,22 +78,23 @@ func (s *Server) ListenAndServe() error {
 			return err
 		}
 
-		c := s.newConn(rwc)
-
-		s.downChMap.Store(rwc.RemoteAddr(), c.downCh)
-
-		s.connMap.Store(rwc.RemoteAddr(), rwc)
-
-		go c.serve()
+		go s.newConn(rwc)
 	}
 }
 
 func (s *Server) newConn(rwc net.Conn) *conn {
-	return &conn{
+
+	c := &conn{
 		server: s,
 		rwc:    rwc,
 		downCh: make(chan []byte),
 	}
+
+	s.downChMap.Store(rwc.RemoteAddr(), c.downCh)
+
+	s.connMap.Store(rwc.RemoteAddr(), rwc)
+
+	return c
 }
 
 func (s *Server) CloseConn(addr any) error {
@@ -156,11 +160,12 @@ func (c *conn) serve() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 设备离线，清除下发通道
+	// 设备离线
 	// 同时这也是判断设备是否在线的依据
 	defer func() {
 		c.server.downChMap.Delete(c.rwc.RemoteAddr())
 		c.server.connMap.Delete(c.rwc)
+		c.server.onConnClose(c.rwc.RemoteAddr())
 	}()
 
 	go func() {
@@ -172,7 +177,6 @@ func (c *conn) serve() {
 			l, err := c.rwc.Read(buf)
 			if err != nil {
 				cancel()
-				log.Println(err)
 				return
 			}
 
@@ -204,7 +208,6 @@ func (c *conn) serve() {
 
 			respCh, ok := c.server.respChMap.Load(c.rwc.RemoteAddr())
 			if !ok {
-				log.Printf("查找响应通道失败，remote address:%v", c.rwc.RemoteAddr().String())
 				continue
 			}
 
@@ -228,7 +231,6 @@ func (c *conn) write(buf []byte) error {
 	defer c.rwc.SetReadDeadline(time.Time{})
 
 	if _, err := c.rwc.Write(buf); err != nil {
-		log.Println(err)
 		return err
 	}
 
