@@ -111,7 +111,7 @@ func (s *Server) CloseConn(addr any) error {
 	return rwc.Close()
 }
 
-func (s *Server) DownloadCommand(ctx context.Context, addr net.Addr, cmd []byte) ([]byte, error) {
+func (s *Server) DownloadCommand(ctx context.Context, addr any, cmd []byte) ([]byte, error) {
 	c, ok := s.downChMap.Load(addr)
 	if !ok {
 		return nil, errors.New("connection not found")
