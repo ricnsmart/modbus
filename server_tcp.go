@@ -3,6 +3,7 @@ package modbus
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -22,13 +23,6 @@ type Server struct {
 	// 存储连接
 	// 用于主动关闭连接
 	connMap sync.Map
-
-	// 按照remoteAddr存储下发数据通道
-	downChMap sync.Map
-
-	// 按照remoteAddr存储下发响应数据通道
-	// 其中的通道需要用时创建、用完删除
-	respChMap sync.Map
 
 	// 设备上报数据，server一次读取多少个字节
 	readSize int
@@ -81,22 +75,24 @@ func (s *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-
+		log.Print(1)
 		go s.newConn(rwc).serve()
 	}
 }
 
 func (s *Server) newConn(rwc net.Conn) *conn {
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	c := &conn{
 		server: s,
 		rwc:    rwc,
 		downCh: make(chan []byte),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
-	s.downChMap.Store(rwc.RemoteAddr(), c.downCh)
-
-	s.connMap.Store(rwc.RemoteAddr(), rwc)
+	s.connMap.Store(rwc.RemoteAddr(), c)
 
 	return c
 }
@@ -106,32 +102,68 @@ func (s *Server) CloseConn(addr any) error {
 	if !ok {
 		return errors.New("connection not found")
 	}
-	rwc := v.(net.Conn)
-	defer s.connMap.Delete(addr)
-	return rwc.Close()
+	return v.(net.Conn).Close()
+}
+
+func (s *Server) DownloadCommandToAll(ctx context.Context, cmd []byte, callback func(addr any, err error)) {
+
+	s.connMap.Range(func(key, value any) bool {
+		conn := value.(*conn)
+
+		respCh := make(chan []byte)
+
+		conn.respCh = respCh
+		defer close(conn.respCh)
+
+		select {
+		case <-conn.ctx.Done():
+			callback(key, errors.New("connection closed"))
+			return false
+		case <-ctx.Done():
+			callback(key, errors.New("download closed"))
+			return false
+		case conn.downCh <- cmd:
+
+		}
+
+		select {
+		case <-conn.ctx.Done():
+			callback(key, errors.New("connection closed"))
+		case <-ctx.Done():
+			callback(key, errors.New("response timeout"))
+		case <-respCh:
+
+		}
+		return false
+	})
+
 }
 
 func (s *Server) DownloadCommand(ctx context.Context, addr any, cmd []byte) ([]byte, error) {
-	c, ok := s.downChMap.Load(addr)
+	c, ok := s.connMap.Load(addr)
 	if !ok {
 		return nil, errors.New("connection not found")
 	}
 
 	respCh := make(chan []byte)
 
-	s.respChMap.Store(addr, respCh)
-	defer s.respChMap.Delete(addr)
+	conn := c.(*conn)
 
-	downCh := c.(chan []byte)
+	conn.respCh = respCh
+	defer close(conn.respCh)
 
 	select {
+	case <-conn.ctx.Done():
+		return nil, errors.New("connection closed")
 	case <-ctx.Done():
 		return nil, errors.New("download timeout")
-	case downCh <- cmd:
+	case conn.downCh <- cmd:
 
 	}
 
 	select {
+	case <-conn.ctx.Done():
+		return nil, errors.New("connection closed")
 	case <-ctx.Done():
 		return nil, errors.New("response timeout")
 	case resp := <-respCh:
@@ -155,6 +187,10 @@ type conn struct {
 
 	// respCh 用于存放下发后设备的响应
 	respCh chan []byte
+
+	ctx context.Context
+
+	cancel context.CancelFunc
 }
 
 func (c *conn) serve() {
@@ -162,14 +198,11 @@ func (c *conn) serve() {
 	// upCh 设备上发的数据
 	upCh := make(chan []byte)
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	// 设备离线
 	// 同时这也是判断设备是否在线的依据
 	defer func() {
-		c.server.downChMap.Delete(c.rwc.RemoteAddr())
-		c.server.connMap.Delete(c.rwc)
 		c.server.onConnClose(c.rwc.RemoteAddr())
+		c.server.connMap.Delete(c.rwc)
 	}()
 
 	go func() {
@@ -180,7 +213,7 @@ func (c *conn) serve() {
 
 			l, err := c.rwc.Read(buf)
 			if err != nil {
-				cancel()
+				c.cancel()
 				return
 			}
 
@@ -193,26 +226,20 @@ func (c *conn) serve() {
 
 	for {
 		select {
-		case <-ctx.Done():
-			c.server.downChMap.Delete(c.rwc.RemoteAddr())
+		case <-c.ctx.Done():
 			return
 		case packet := <-upCh:
 			go c.server.handle(packet, c.rwc.RemoteAddr(), func(payload []byte) error {
 				if err := c.write(payload); err != nil {
-					cancel()
+					c.cancel()
 					return err
 				}
 				return nil
 			})
 		case payload := <-c.downCh:
 			if err := c.write(payload); err != nil {
-				cancel()
+				c.cancel()
 				return
-			}
-
-			respCh, ok := c.server.respChMap.Load(c.rwc.RemoteAddr())
-			if !ok {
-				continue
 			}
 
 			// 超时时间，最长不应超过读取超时时
@@ -221,10 +248,17 @@ func (c *conn) serve() {
 
 			select {
 			case <-ticker.C:
-
+				log.Print("单条命令响应超时")
 			case resp := <-upCh:
-				respCh.(chan []byte) <- resp
+				select {
+				case c.respCh <- resp:
+
+				case <-ticker.C:
+					log.Print("响应返回超时")
+				}
 			}
+
+			ticker.Stop()
 		}
 	}
 }
