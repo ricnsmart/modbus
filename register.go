@@ -135,7 +135,7 @@ func FindStartAndNum[T Register](rs []T) (start, num uint16) {
 
 	start = first.Start()
 
-	num = end.Start() - start + 1 + end.Num()
+	num = end.Start() - start + end.Num()
 
 	return
 }
