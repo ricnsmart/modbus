@@ -140,9 +140,23 @@ func FindStartAndNum[T Register](rs []T) (start, num uint16) {
 	return
 }
 
-type NameableReadWriteRegister interface {
+type NameableRoRegister interface {
 	Nameable
-	ReadWriteRegister
+	Register
+	Readable
+}
+
+type NameableWoRegister interface {
+	Nameable
+	Register
+	Writable
+}
+
+type NameableRwRegister interface {
+	Nameable
+	Register
+	Readable
+	Writable
 }
 
 func Names[T Nameable](rs []T) []string {

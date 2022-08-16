@@ -19,7 +19,7 @@ var (
 )
 
 func (e Exception) Error() string {
-	return fmt.Sprintf("%d", e)
+	return e.String()
 }
 
 func (e Exception) String() string {

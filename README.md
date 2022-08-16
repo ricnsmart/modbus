@@ -9,4 +9,4 @@ modbus协议的go实现
 | voson wang | 2020-12 ~ ? | i@voson.me|
 
 ## Thank
-github.com/tbrandon/mbserver
+[github.com/tbrandon/mbserver](https://github.com/tbrandon/mbserver)
