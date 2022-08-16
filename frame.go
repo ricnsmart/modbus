@@ -23,12 +23,6 @@ func GetException(frame Framer) (exception Exception) {
 	return exception
 }
 
-// GetRegister 获取读取响应的寄存器地址
-func GetRegister(frame Framer) uint16 {
-	data := frame.GetData()
-	return binary.BigEndian.Uint16(data[0:2])
-}
-
 // SetDataWithRegisterAndNumber 用于读寄存器
 // SetDataWithRegisterAndNumber sets the RTUFrame Data byte field to hold a register and number of registers
 func SetDataWithRegisterAndNumber(frame Framer, register uint16, number uint16) {
