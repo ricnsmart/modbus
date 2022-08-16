@@ -1,7 +1,6 @@
 package modbus
 
 import (
-	"log"
 	"net"
 	"time"
 )
@@ -93,7 +92,6 @@ func (c *Conn) Close() {
 }
 
 func (c *Conn) DownloadCommand(frame Framer) (Framer, error) {
-	log.Printf("0x% x", frame.Bytes())
 	if err := c.Write(frame.Bytes()); err != nil {
 		return nil, err
 	}
@@ -102,7 +100,6 @@ func (c *Conn) DownloadCommand(frame Framer) (Framer, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("0x% x", buf)
 	respFrame, err := NewRTUFrame(buf)
 	if err != nil {
 		return nil, err
