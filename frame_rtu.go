@@ -37,6 +37,30 @@ func NewRTUFrame(packet []byte) (*RTUFrame, error) {
 	return frame, nil
 }
 
+// NewRTUFrame2 使用大端CRC
+func NewRTUFrame2(packet []byte) (*RTUFrame, error) {
+	// Check the that the packet length.
+	if len(packet) < 5 {
+		return nil, fmt.Errorf("rtu frame error: packet less than 5 bytes: %v", packet)
+	}
+
+	// Check the CRC.
+	pLen := len(packet)
+	crcExpect := binary.BigEndian.Uint16(packet[pLen-2 : pLen])
+	crcCalc := crcModbus(packet[0 : pLen-2])
+	if crcCalc != crcExpect {
+		return nil, fmt.Errorf("rtu frame error: CRC (expected 0x%x, got 0x%x)", crcExpect, crcCalc)
+	}
+
+	frame := &RTUFrame{
+		Address:  packet[0],
+		Function: packet[1],
+		Data:     packet[2 : pLen-2],
+	}
+
+	return frame, nil
+}
+
 // Copy the RTUFrame.
 func (frame *RTUFrame) Copy() Framer {
 	f := *frame
@@ -58,6 +82,25 @@ func (frame *RTUFrame) Bytes() []byte {
 	// Add the CRC.
 	bytes = append(bytes, []byte{0, 0}...)
 	binary.LittleEndian.PutUint16(bytes[pLen:pLen+2], crc)
+
+	return bytes
+}
+
+// Bytes2 使用大端CRC
+func (frame *RTUFrame) Bytes2() []byte {
+	bytes := make([]byte, 2)
+
+	bytes[0] = frame.Address
+	bytes[1] = frame.Function
+	bytes = append(bytes, frame.Data...)
+
+	// Calculate the CRC.
+	pLen := len(bytes)
+	crc := crcModbus(bytes[0:pLen])
+
+	// Add the CRC.
+	bytes = append(bytes, []byte{0, 0}...)
+	binary.BigEndian.PutUint16(bytes[pLen:pLen+2], crc)
 
 	return bytes
 }
