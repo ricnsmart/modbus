@@ -2,6 +2,7 @@ package modbus
 
 import (
 	"io"
+	"log"
 	"net"
 	"time"
 )
@@ -75,7 +76,10 @@ func (c *Conn) Read() ([]byte, error) {
 		// Read方法返回EOF错误，表示本端感知到对端已经关闭连接（本端已接收到对端发送的FIN）。
 		// 此后如果本端不调用Close方法，只释放本端的连接对象，则连接处于非完全关闭状态（CLOSE_WAIT）。即文件描述符发生泄漏。
 		if err == io.EOF {
-			_ = c.rwc.Close()
+			log.Println(err)
+			if err := c.rwc.Close(); err != nil {
+				log.Println(err)
+			}
 		}
 		return nil, err
 	}
