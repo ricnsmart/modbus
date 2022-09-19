@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"io"
 	"net"
 	"time"
 )
@@ -71,6 +72,11 @@ func (c *Conn) Read() ([]byte, error) {
 
 	l, err := c.rwc.Read(buf)
 	if err != nil {
+		// Read方法返回EOF错误，表示本端感知到对端已经关闭连接（本端已接收到对端发送的FIN）。
+		// 此后如果本端不调用Close方法，只释放本端的连接对象，则连接处于非完全关闭状态（CLOSE_WAIT）。即文件描述符发生泄漏。
+		if err == io.EOF {
+			_ = c.rwc.Close()
+		}
 		return nil, err
 	}
 
@@ -82,13 +88,15 @@ func (c *Conn) Write(buf []byte) error {
 
 	defer c.rwc.SetWriteDeadline(time.Time{})
 
+	// Write方法返回broken pipe错误，表示本端感知到对端已经关闭连接（本端已接收到对端发送的RST）。
+	// 此后本端可不调用Close方法。连接处于完全关闭状态。
 	_, err := c.rwc.Write(buf)
 
 	return err
 }
 
 func (c *Conn) Close() {
-	c.rwc.Close()
+	_ = c.rwc.Close()
 }
 
 func (c *Conn) DownloadCommand(frame Framer) (Framer, error) {
