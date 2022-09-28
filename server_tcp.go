@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"log"
 	"net"
 	"time"
 )
@@ -17,6 +18,7 @@ type Server struct {
 	readSize      int
 	readDeadLine  time.Duration
 	writeDeadLine time.Duration
+	debug         bool
 }
 
 func NewServer(address string) *Server {
@@ -38,6 +40,10 @@ func (s *Server) SetReadDeadline(readDeadLine time.Duration) {
 
 func (s *Server) SetWriteDeadline(writeDeadLine time.Duration) {
 	s.writeDeadLine = writeDeadLine
+}
+
+func (s *Server) SetDebug(debug bool) {
+	s.debug = debug
 }
 
 func (s *Server) ListenTCP() error {
@@ -74,6 +80,10 @@ func (c *Conn) Read() ([]byte, error) {
 		return nil, err
 	}
 
+	if c.server.debug {
+		log.Printf("% x\n", buf[:l])
+	}
+
 	return buf[:l], nil
 }
 
@@ -82,13 +92,17 @@ func (c *Conn) Write(buf []byte) error {
 
 	defer c.rwc.SetWriteDeadline(time.Time{})
 
+	if c.server.debug {
+		log.Printf("% x\n", buf)
+	}
+
 	_, err := c.rwc.Write(buf)
 
 	return err
 }
 
 func (c *Conn) Close() {
-	c.rwc.Close()
+	_ = c.rwc.Close()
 }
 
 func (c *Conn) DownloadCommand(frame Framer) (Framer, error) {
