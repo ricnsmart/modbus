@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-var DefaultReadDeadLine = 60 * time.Second
+var DefaultReadDeadLine = 120 * time.Second
 
-var DefaultWriteDeadLine = 60 * time.Second
+var DefaultWriteDeadLine = 120 * time.Second
 
 var DefaultReadSize = 512
 
