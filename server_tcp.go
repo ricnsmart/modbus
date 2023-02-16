@@ -3,6 +3,7 @@ package modbus
 import (
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -66,6 +67,7 @@ func (s *Server) ListenTCP() error {
 type Conn struct {
 	rwc    net.Conn
 	server *Server
+	mu     sync.Mutex
 }
 
 func (c *Conn) Read() ([]byte, error) {
@@ -81,7 +83,7 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	if c.server.debug {
-		log.Printf("% x\n", buf[:l])
+		log.Printf("DEBUG %v Read: % x\n", c.rwc.RemoteAddr(), buf[:l])
 	}
 
 	return buf[:l], nil
@@ -93,7 +95,7 @@ func (c *Conn) Write(buf []byte) error {
 	defer c.rwc.SetWriteDeadline(time.Time{})
 
 	if c.server.debug {
-		log.Printf("% x\n", buf)
+		log.Printf("DEBUG %v write: % x\n", c.rwc.RemoteAddr(), buf)
 	}
 
 	_, err := c.rwc.Write(buf)
@@ -101,11 +103,30 @@ func (c *Conn) Write(buf []byte) error {
 	return err
 }
 
-func (c *Conn) Close() {
-	_ = c.rwc.Close()
+func (c *Conn) Close() error {
+	return c.rwc.Close()
 }
 
-func (c *Conn) DownloadCommand(frame Framer) (Framer, error) {
+func (c *Conn) Addr() net.Addr {
+	return c.rwc.RemoteAddr()
+}
+
+func (c *Conn) Lock() {
+	c.mu.Lock()
+}
+
+func (c *Conn) Unlock() {
+	c.mu.Unlock()
+}
+
+func (c *Conn) NewRequest(frame Framer) (Framer, error) {
+	c.mu.Lock()
+	defer func() {
+		// 控制请求频率，减少粘包
+		time.Sleep(100)
+		c.mu.Unlock()
+	}()
+
 	if err := c.Write(frame.Bytes()); err != nil {
 		return nil, err
 	}
