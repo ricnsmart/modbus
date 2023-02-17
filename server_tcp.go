@@ -12,7 +12,8 @@ import (
 type ErrorLevel int
 
 const (
-	INFO ErrorLevel = iota + 1
+	Silent ErrorLevel = iota
+	INFO
 	ERROR
 	DEBUG
 )
@@ -106,16 +107,8 @@ func (s *Server) ListenTCP() error {
 		atomic.AddInt32(&s.total, 1)
 
 		go func() {
-			defer func() {
-				if err := rwc.Close(); err != nil {
-					if s.logLevel >= ERROR {
-						log.Printf("ERROR %v %v\n", rwc.RemoteAddr(), err)
-					}
-					return
-				}
-				atomic.AddInt32(&s.total, -1)
-			}()
 			s.serve(&Conn{rwc: rwc, server: s})
+			atomic.AddInt32(&s.total, -1)
 		}()
 	}
 }
