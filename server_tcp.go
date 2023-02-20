@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type ErrorLevel int
+type ErrorLevel uint8
 
 const (
 	Silent ErrorLevel = iota
@@ -22,12 +22,12 @@ var DefaultReadDeadLine = 120 * time.Second
 
 var DefaultWriteDeadLine = 120 * time.Second
 
-var DefaultReadSize = 512
+var DefaultReadSize uint16 = 512
 
 type Server struct {
 	address       string
 	serve         func(conn *Conn)
-	readSize      int
+	readSize      uint16
 	readDeadLine  time.Duration
 	writeDeadLine time.Duration
 
@@ -64,6 +64,10 @@ func (s *Server) SetWriteDeadline(writeDeadLine time.Duration) {
 	s.writeDeadLine = writeDeadLine
 }
 
+func (s *Server) SetMaxReadSize(size uint16) {
+	s.readSize = size
+}
+
 func (s *Server) SetInterval(interval time.Duration) {
 	s.interval = interval
 }
@@ -72,7 +76,7 @@ func (s *Server) SetLogLevel(logLevel ErrorLevel) {
 	s.logLevel = logLevel
 }
 
-func (s *Server) ListenTCP() error {
+func (s *Server) ListenAndServe() error {
 	listener, err := net.Listen("tcp", s.address)
 	if err != nil {
 		return err
@@ -119,7 +123,7 @@ type Conn struct {
 	mu     sync.Mutex
 }
 
-func (c *Conn) Read() ([]byte, error) {
+func (c *Conn) read() ([]byte, error) {
 	_ = c.rwc.SetReadDeadline(time.Now().Add(c.server.readDeadLine))
 
 	defer c.rwc.SetReadDeadline(time.Time{})
@@ -132,13 +136,13 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	if c.server.logLevel == DEBUG {
-		log.Printf("DEBUG %v Read: % x\n", c.rwc.RemoteAddr(), buf[:l])
+		log.Printf("DEBUG %v read: % x\n", c.rwc.RemoteAddr(), buf[:l])
 	}
 
 	return buf[:l], nil
 }
 
-func (c *Conn) Write(buf []byte) error {
+func (c *Conn) write(buf []byte) error {
 	_ = c.rwc.SetWriteDeadline(time.Now().Add(c.server.writeDeadLine))
 
 	defer c.rwc.SetWriteDeadline(time.Time{})
@@ -160,14 +164,6 @@ func (c *Conn) Addr() net.Addr {
 	return c.rwc.RemoteAddr()
 }
 
-func (c *Conn) Lock() {
-	c.mu.Lock()
-}
-
-func (c *Conn) Unlock() {
-	c.mu.Unlock()
-}
-
 func (c *Conn) NewRequest(frame Framer) (Framer, error) {
 	c.mu.Lock()
 	defer func() {
@@ -176,11 +172,11 @@ func (c *Conn) NewRequest(frame Framer) (Framer, error) {
 		c.mu.Unlock()
 	}()
 
-	if err := c.Write(frame.Bytes()); err != nil {
+	if err := c.write(frame.Bytes()); err != nil {
 		return nil, err
 	}
 
-	buf, err := c.Read()
+	buf, err := c.read()
 	if err != nil {
 		return nil, err
 	}
@@ -192,4 +188,10 @@ func (c *Conn) NewRequest(frame Framer) (Framer, error) {
 		return nil, exception
 	}
 	return respFrame, nil
+}
+
+func (c *Conn) Ask() ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.read()
 }
