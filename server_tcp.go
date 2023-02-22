@@ -195,3 +195,15 @@ func (c *Conn) Ask() ([]byte, error) {
 	defer c.mu.Unlock()
 	return c.read()
 }
+
+// Download 只下发命令，不等待设备响应
+// 比如修改设备指向，设备将不会回应，如果等待，需要等待到连接超时
+func (c *Conn) Download(frame Framer) error {
+	c.mu.Lock()
+	defer func() {
+		// 控制请求频率，减少粘包
+		time.Sleep(100)
+		c.mu.Unlock()
+	}()
+	return c.write(frame.Bytes())
+}
