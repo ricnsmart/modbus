@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -35,9 +34,6 @@ type Server struct {
 
 	// 打印连接数量的时间间隔，默认5分钟
 	interval time.Duration
-
-	// 连接总数
-	total int32
 }
 
 func NewServer(address string) *Server {
@@ -48,7 +44,6 @@ func NewServer(address string) *Server {
 		writeDeadLine: DefaultWriteDeadLine,
 		logLevel:      ERROR,
 		interval:      5 * time.Minute,
-		total:         0,
 	}
 }
 
@@ -84,6 +79,8 @@ func (s *Server) ListenAndServe() error {
 
 	defer listener.Close()
 
+	var counter AtomicCounter
+
 	if s.logLevel >= INFO {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -97,7 +94,7 @@ func (s *Server) ListenAndServe() error {
 				case <-ticker.C:
 					ticker.Stop()
 					ticker = time.NewTicker(s.interval)
-					log.Printf("INFO connections: %v\n", s.total)
+					log.Printf("INF connections: %v\n", counter.Load())
 				}
 			}
 		}()
@@ -108,11 +105,11 @@ func (s *Server) ListenAndServe() error {
 			return err
 		}
 
-		atomic.AddInt32(&s.total, 1)
+		counter.Add(1)
 
 		go func() {
 			s.serve(&Conn{rwc: rwc, server: s})
-			atomic.AddInt32(&s.total, -1)
+			counter.Add(-1)
 		}()
 	}
 }
@@ -136,7 +133,7 @@ func (c *Conn) read() ([]byte, error) {
 	}
 
 	if c.server.logLevel == DEBUG {
-		log.Printf("DEBUG %v read: % x\n", c.rwc.RemoteAddr(), buf[:l])
+		log.Printf("DBG %v read: % x\n", c.rwc.RemoteAddr(), buf[:l])
 	}
 
 	return buf[:l], nil
@@ -148,7 +145,7 @@ func (c *Conn) write(buf []byte) error {
 	defer c.rwc.SetWriteDeadline(time.Time{})
 
 	if c.server.logLevel == DEBUG {
-		log.Printf("DEBUG %v write: % x\n", c.rwc.RemoteAddr(), buf)
+		log.Printf("DBG %v write: % x\n", c.rwc.RemoteAddr(), buf)
 	}
 
 	_, err := c.rwc.Write(buf)
