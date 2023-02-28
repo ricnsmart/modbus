@@ -109,6 +109,7 @@ func (s *Server) ListenAndServe() error {
 
 		go func() {
 			s.serve(&Conn{rwc: rwc, server: s})
+			_ = rwc.Close()
 			counter.Add(-1)
 		}()
 	}
